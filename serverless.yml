@@ -1,0 +1,29 @@
+service: efflux-scrape-function
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1 # Change to your preferred region
+  memorySize: 2048 # Puppeteer needs memory
+  timeout: 300 # 5 minutes should be enough for most scrapes
+
+functions:
+  scrapeAds:
+    handler: src/handlers/scraper.handler
+    events:
+      - http:
+          path: scrape
+          method: post
+          cors: true
+    environment:
+      NODE_ENV: production
+
+plugins:
+  - serverless-offline # For local testing
+  - serverless-dotenv-plugin # For environment variables
+
+custom:
+  serverless-offline:
+    httpPort: 3000 

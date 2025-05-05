@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Runtime data
+*.pid
+*.seed
+*.log
+*.out
+*.err
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build
+.serverless/
+.webpack/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# AWS
+aws-exports.js
+.awscache/
+
+# OS
+.DS_Store
+Thumbs.db 

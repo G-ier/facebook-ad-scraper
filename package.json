@@ -1,0 +1,22 @@
+{
+  "name": "efflux-scrape-function",
+  "version": "1.0.0",
+  "description": "Serverless scraper for Facebook ad library",
+  "main": "src/handlers/scraper.js",
+  "scripts": {
+    "test": "node src/local/test.js",
+    "start": "serverless offline",
+    "deploy": "serverless deploy"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "puppeteer": "^21.11.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "serverless": "^3.40.0",
+    "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-offline": "^13.9.0"
+  }
+}
