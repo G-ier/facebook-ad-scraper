@@ -107,7 +107,7 @@ class FacebookScraper extends BaseScraper {
                     avatar: null
                 },
                 content: {
-                    html: null
+                    text: null
                 },
                 runningInfo: {
                     startDate: null,
@@ -148,11 +148,17 @@ class FacebookScraper extends BaseScraper {
             if (sliderResult.isSlider) {
                 console.log(`Found slider ad`);
                 adData.type = 'slider';
-                adData.media.type = 'slider';
+                
+                // For slider ads, we only need the media.items array, not type or url
+                delete adData.media.type;
+                delete adData.media.url;
+                
+                // Remove callToAction from the main object since it's in each media item
+                delete adData.callToAction;
 
                 // Extract slider-specific content
                 const sliderDescription = await this.extractSliderAdDescription(result.html);
-                if (sliderDescription) adData.content.html = sliderDescription.html;
+                if (sliderDescription) adData.content.text = sliderDescription.text;
 
                 // Extract all slider media items (could be mix of images and videos)
                 const sliderItems = await this.extractSliderMediaAds(result.html);
@@ -178,7 +184,7 @@ class FacebookScraper extends BaseScraper {
 
                 // Extract description for standard ads
                 const descriptionResult = await this.extractAdDescription(result.html, adData.type);
-                if (descriptionResult) adData.content.html = descriptionResult.html;
+                if (descriptionResult) adData.content.text = descriptionResult.text;
 
                 // Extract call-to-action for standard ads
                 const callToAction = await this.extractCallToAction(result.html, adData.type);
@@ -436,13 +442,18 @@ class FacebookScraper extends BaseScraper {
                     ? checkContainer.innerHTML
                     : extractedHtml;
 
-                return { html: finalHtml || null };
+                return { text: finalHtml || null };
             }, html, adType);
+
+            // Parse the extracted HTML using the same method used for slider ads
+            if (result && result.text) {
+                result.text = this.parseAdDescription(result.text);
+            }
 
             return result;
         } catch (error) {
             console.error('Error extracting ad description:', error);
-            return { html: null };
+            return { text: null };
         }
     }
 
@@ -576,7 +587,7 @@ class FacebookScraper extends BaseScraper {
 
     async extractSliderAdDescription(html) {
         try {
-            const descriptionHtml = await this.page.evaluate((htmlContent) => {
+            const descriptionText = await this.page.evaluate((htmlContent) => {
                 const tempContainer = document.createElement('div');
                 tempContainer.innerHTML = htmlContent;
 
@@ -645,27 +656,27 @@ class FacebookScraper extends BaseScraper {
             }, html);
 
             // Parse the HTML using our helper method
-            const parsedDescription = descriptionHtml ?
-                this.parseAdDescription(descriptionHtml) : null;
+            const parsedDescription = descriptionText ?
+                this.parseAdDescription(descriptionText) : null;
 
-            return { html: parsedDescription };
+            return { text: parsedDescription };
         } catch (error) {
             console.error('Error extracting slider ad description:', error);
-            return { html: null };
+            return { text: null };
         }
     }
 
-    parseAdDescription(htmlContent) {
-        if (!htmlContent) return null;
+    parseAdDescription(text) {
+        if (!text) return null;
 
-        // First replace all <br> tags with newline characters
-        let text = htmlContent.replace(/<br\s*\/?>/gi, '\n');
+        // First replace all <br> tags with newline characters (in case HTML is passed)
+        let processedText = text.replace(/<br\s*\/?>/gi, '\n');
 
-        // Remove all other HTML tags
-        text = text.replace(/<[^>]*>/g, '');
+        // Remove all HTML tags
+        processedText = processedText.replace(/<[^>]*>/g, '');
 
         // Decode HTML entities
-        text = text.replace(/&nbsp;/g, ' ')
+        processedText = processedText.replace(/&nbsp;/g, ' ')
             .replace(/&amp;/g, '&')
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
@@ -673,12 +684,12 @@ class FacebookScraper extends BaseScraper {
             .replace(/&#39;/g, "'");
 
         // Clean up whitespace but preserve intentional newlines
-        text = text.replace(/[ \t]+/g, ' ');
+        processedText = processedText.replace(/[ \t]+/g, ' ');
 
         // Normalize multiple consecutive newlines to just two
-        text = text.replace(/\n{3,}/g, '\n\n');
+        processedText = processedText.replace(/\n{3,}/g, '\n\n');
 
-        return text.trim();
+        return processedText.trim();
     }
 
     async extractSliderMediaAds(html) {
@@ -842,7 +853,7 @@ class FacebookScraper extends BaseScraper {
                     ctaInfo.url = urlInfo.url;
                     ctaInfo.rawUrl = urlInfo.rawUrl;
 
-                    // Extract only type from the second div (no text)
+                    // Extract type from the second div
                     if (contentDivs.length >= 2) {
                         const secondDiv = contentDivs[1];
                         const secondDivText = secondDiv.textContent.trim();
@@ -856,10 +867,24 @@ class FacebookScraper extends BaseScraper {
                         }
                     }
 
-                    // Extract text exclusively from the element after the <a> tag
+                    // Extract text from the element after the <a> tag
                     const textElement = linkElement.nextElementSibling;
-                    if (textElement) {
+                    if (textElement && textElement.textContent.trim()) {
                         ctaInfo.text = textElement.textContent.trim();
+                    } 
+                    // If no text found after <a>, fall back to the second div inside <a>
+                    else if (contentDivs.length >= 2) {
+                        const secondDiv = contentDivs[1];
+                        const secondDivText = secondDiv.textContent.trim();
+                        
+                        // If we found a type, remove it from the text
+                        if (ctaInfo.type && secondDivText.includes(ctaInfo.type)) {
+                            ctaInfo.text = secondDivText.replace(ctaInfo.type, '').trim();
+                        } 
+                        // If no type was found, use the entire text
+                        else if (!ctaInfo.type) {
+                            ctaInfo.text = secondDivText;
+                        }
                     }
 
                     return {
