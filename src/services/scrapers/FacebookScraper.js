@@ -122,25 +122,7 @@ class FacebookScraper extends BaseScraper {
                 return adData;
             }
 
-            // Extract media information (video or image)
-            const videoInfo = await this.findVideoUrl(result.html);
-            if (videoInfo && videoInfo.src) {
-                adData.type = 'video';
-                adData.media.type = 'video';
-                adData.media.url = videoInfo.src;
-                if (videoInfo.poster) {
-                    adData.media.posterUrl = videoInfo.poster;
-                }
-            } else {
-                const imageUrl = await this.findImageUrl(result.html);
-                if (imageUrl) {
-                    adData.type = 'image';
-                    adData.media.type = 'image';
-                    adData.media.url = imageUrl;
-                }
-            }
-
-            // Extract other ad details
+            // First, extract common data for all ad types
             const libraryId = await this.extractLibraryId(result.html);
             if (libraryId) adData.libraryId = libraryId;
 
@@ -154,16 +136,59 @@ class FacebookScraper extends BaseScraper {
             if (advertiserInfo.name) adData.advertiser.name = advertiserInfo.name;
             if (advertiserInfo.avatar) adData.advertiser.avatar = advertiserInfo.avatar;
 
-            const descriptionResult = await this.extractAdDescription(result.html, adData.type);
-            if (descriptionResult) adData.content.html = descriptionResult.html;
-
-            const callToAction = await this.extractCallToAction(result.html, adData.type);
-            if (callToAction.text) adData.callToAction.text = callToAction.text;
-            if (callToAction.url) adData.callToAction.url = callToAction.url;
-            if (callToAction.type) adData.callToAction.type = callToAction.type;
-
             const platforms = await this.detectPlatforms(result.html);
             if (platforms && platforms.length > 0) adData.platforms = platforms;
+
+            // Check if this is a slider ad
+            const sliderResult = await this.findSliderAd(result.html);
+            if (sliderResult.isSlider) {
+                console.log(`Found slider ad with type: ${sliderResult.mediaType}`);
+                adData.type = `slider-${sliderResult.mediaType}`;
+                adData.media.type = `slider-${sliderResult.mediaType}`;
+
+                // Extract slider-specific content
+                const sliderDescription = await this.extractSliderAdDescription(result.html);
+                if (sliderDescription) adData.content.html = sliderDescription.html;
+
+                // Extract slider media based on type
+                if (sliderResult.mediaType === 'video') {
+                    const sliderVideos = await this.extractSliderVideoAds(result.html);
+                    adData.media.items = sliderVideos || [];
+                } else if (sliderResult.mediaType === 'image') {
+                    const sliderImages = await this.extractSliderImageAds(result.html);
+                    adData.media.items = sliderImages || [];
+                }
+
+                
+            } else {
+                // Handle standard video or image ads
+                const videoInfo = await this.findVideoUrl(result.html);
+                if (videoInfo && videoInfo.src) {
+                    adData.type = 'video';
+                    adData.media.type = 'video';
+                    adData.media.url = videoInfo.src;
+                    if (videoInfo.poster) {
+                        adData.media.posterUrl = videoInfo.poster;
+                    }
+                } else {
+                    const imageUrl = await this.findImageUrl(result.html);
+                    if (imageUrl) {
+                        adData.type = 'image';
+                        adData.media.type = 'image';
+                        adData.media.url = imageUrl;
+                    }
+                }
+
+                // Extract description for standard ads
+                const descriptionResult = await this.extractAdDescription(result.html, adData.type);
+                if (descriptionResult) adData.content.html = descriptionResult.html;
+
+                // Extract call-to-action for standard ads
+                const callToAction = await this.extractCallToAction(result.html, adData.type);
+                if (callToAction.text) adData.callToAction.text = callToAction.text;
+                if (callToAction.url) adData.callToAction.url = callToAction.url;
+                if (callToAction.type) adData.callToAction.type = callToAction.type;
+            }
 
             return adData;
         } catch (error) {
@@ -175,9 +200,48 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts video URL from ad HTML
-     */
+    async findSliderAd(html) {
+        try {
+            const sliderResult = await this.page.evaluate((htmlContent) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+
+                // Look for navigation buttons that indicate a slider
+                const prevButton = tempContainer.querySelector('div[aria-label="Previous items"]');
+                const nextButton = tempContainer.querySelector('div[aria-label="Next items"]');
+
+                // Default result
+                const result = {
+                    isSlider: false,
+                    mediaType: null
+                };
+
+                // If not a slider, return early
+                if (!prevButton || !nextButton) {
+                    return result;
+                }
+
+                // It is a slider, now determine if it contains videos or images
+                result.isSlider = true;
+
+                // Check if there's a video element in the slider
+                const videoElement = tempContainer.querySelector('video');
+                if (videoElement) {
+                    result.mediaType = 'video';
+                } else {
+                    // If no video, assume it's image-based
+                    result.mediaType = 'image';
+                }
+
+                return result;
+            }, html);
+
+            return sliderResult;
+        } catch (error) {
+            return { isSlider: false, mediaType: null };
+        }
+    }
+
     async findVideoUrl(html) {
         try {
             const videoInfo = await this.page.evaluate((htmlContent) => {
@@ -200,9 +264,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts image URL from ad HTML
-     */
     async findImageUrl(html) {
         try {
             const imageUrl = await this.page.evaluate((htmlContent) => {
@@ -244,9 +305,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad library ID from HTML
-     */
     async extractLibraryId(html) {
         try {
             const libraryId = await this.page.evaluate((htmlContent) => {
@@ -265,9 +323,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad running information (start date, active time)
-     */
     async extractRunningInfo(html) {
         try {
             const runningInfo = await this.page.evaluate((htmlContent) => {
@@ -301,9 +356,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts advertiser information (name, avatar)
-     */
     async extractAdvertiserInfo(html) {
         try {
             const advertiserInfo = await this.page.evaluate((htmlContent) => {
@@ -354,9 +406,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad description content
-     */
     async extractAdDescription(html, adType) {
         try {
             const result = await this.page.evaluate((htmlContent, adType) => {
@@ -410,9 +459,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts call-to-action information (text, URL, type)
-     */
     async extractCallToAction(html, adType) {
         try {
             const callToAction = await this.page.evaluate((htmlContent, adType, buttonTexts) => {
@@ -483,9 +529,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Detects platforms using CSS mask positions
-     */
     async detectPlatforms(html) {
         try {
             const platforms = await this.page.evaluate((htmlContent) => {
@@ -514,6 +557,97 @@ class FacebookScraper extends BaseScraper {
             return platforms;
         } catch (error) {
             console.error('Error detecting platforms:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Extracts description content for slider ads
+     */
+    async extractSliderAdDescription(html) {
+        try {
+            const descriptionHtml = await this.page.evaluate((htmlContent) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+                
+                // Let's take a more direct approach by looking at the HTML structure
+                // Find text between "Sponsored" and navigation buttons directly
+                const htmlString = tempContainer.innerHTML;
+                
+                // Find "Sponsored" text position
+                const sponsoredIndex = htmlString.indexOf('>Sponsored<');
+                if (sponsoredIndex === -1) return null;
+                
+                // Find slider navigation button position
+                const navigationIndex = htmlString.indexOf('aria-label="Previous items"');
+                if (navigationIndex === -1) return null;
+                
+                // Make sure navigation comes after sponsored
+                if (sponsoredIndex >= navigationIndex) return null;
+                
+                // Extract the HTML segment between these positions
+                const startPos = sponsoredIndex + '>Sponsored<'.length;
+                const segment = htmlString.substring(startPos, navigationIndex);
+                
+                // Create a temporary container with this segment
+                const segmentContainer = document.createElement('div');
+                segmentContainer.innerHTML = segment;
+                
+                // Find all paragraph or span elements with text content
+                const textElements = segmentContainer.querySelectorAll('p, span');
+                let extracted = '';
+                
+                for (const element of textElements) {
+                    // Only keep elements with actual text content
+                    if (element.textContent && element.textContent.trim()) {
+                        extracted += element.outerHTML;
+                    }
+                }
+                
+                return extracted || null;
+            }, html);
+            
+            // Parse the HTML using our helper method
+            const parsedDescription = descriptionHtml ? 
+                this.parseAdDescription(descriptionHtml) : null;
+            
+            return { html: parsedDescription };
+        } catch (error) {
+            console.error('Error extracting slider ad description:', error);
+            return { html: null };
+        }
+    }
+    
+    parseAdDescription(htmlContent) {
+        // Replace <br> tags with newlines
+        let formatted = htmlContent.replace(/<br\s*\/?>/gi, '\n');
+        
+        // Remove all HTML tags but preserve the content
+        formatted = formatted.replace(/<[^>]*>/g, '');
+        
+        // Clean up whitespace
+        formatted = formatted.replace(/\s+/g, ' ');
+        
+        // Clean up consecutive newlines
+        formatted = formatted.replace(/\n{3,}/g, '\n\n');
+        
+        return formatted.trim();
+    }
+
+    async extractSliderVideoAds(html) {
+        try {
+            return 'TODO: Implement slider video extraction';
+        } catch (error) {
+            console.error('Error extracting slider videos:', error);
+            return [];
+        }
+    }
+
+    async extractSliderImageAds(html) {
+        try {
+            return 'TODO: Implement slider image extraction';
+        } catch (error) {
+            console.error('Error extracting slider images:', error);
             return [];
         }
     }
