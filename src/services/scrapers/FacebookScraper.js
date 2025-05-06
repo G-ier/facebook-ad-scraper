@@ -842,43 +842,24 @@ class FacebookScraper extends BaseScraper {
                     ctaInfo.url = urlInfo.url;
                     ctaInfo.rawUrl = urlInfo.rawUrl;
 
-                    // Second div may contain the CTA type/text
+                    // Extract only type from the second div (no text)
                     if (contentDivs.length >= 2) {
-                        const textDiv = contentDivs[1];
-                        const divText = textDiv.textContent.trim();
+                        const secondDiv = contentDivs[1];
+                        const secondDivText = secondDiv.textContent.trim();
                         
-                        // Check if the text contains a known CTA type
-                        let foundType = null;
+                        // Search for any of our known types in the div's text
                         for (const type of buttonTexts) {
-                            if (divText.endsWith(type)) {
-                                foundType = type;
-                                // Remove type from the text to get clean CTA text
-                                const textWithoutType = divText.substring(0, divText.length - type.length).trim();
-                                ctaInfo.text = textWithoutType;
+                            if (secondDivText.includes(type)) {
+                                ctaInfo.type = type;
                                 break;
                             }
                         }
-                        
-                        if (foundType) {
-                            ctaInfo.type = foundType;
-                        } else {
-                            // If no type found, the text is the CTA text
-                            ctaInfo.text = divText;
-                        }
                     }
 
-                    // If there's a third div, it contains additional CTA text
-                    if (contentDivs.length >= 3) {
-                        const additionalTextDiv = contentDivs[2];
-                        const additionalText = additionalTextDiv.textContent.trim();
-                        if (additionalText) {
-                            // Append to existing text if any
-                            if (ctaInfo.text) {
-                                ctaInfo.text = `${ctaInfo.text} - ${additionalText}`;
-                            } else {
-                                ctaInfo.text = additionalText;
-                            }
-                        }
+                    // Extract text exclusively from the element after the <a> tag
+                    const textElement = linkElement.nextElementSibling;
+                    if (textElement) {
+                        ctaInfo.text = textElement.textContent.trim();
                     }
 
                     return {
