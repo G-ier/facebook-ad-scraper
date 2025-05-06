@@ -55,6 +55,9 @@ class FacebookScraper extends BaseScraper {
             const adData = await this.extractAdData();
             console.log('Extraction complete');
             console.log(adData);
+            adData.media.items.forEach(item => {
+                console.log(item);
+            });
             return adData;
         } catch (error) {
             console.error('Error scraping Facebook content:', error);
@@ -561,9 +564,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts description content for slider ads
-     */
     async extractSliderAdDescription(html) {
         try {
             const descriptionHtml = await this.page.evaluate((htmlContent) => {
@@ -593,15 +593,42 @@ class FacebookScraper extends BaseScraper {
                 const segmentContainer = document.createElement('div');
                 segmentContainer.innerHTML = segment;
                 
-                // Find all paragraph or span elements with text content
-                const textElements = segmentContainer.querySelectorAll('p, span');
-                let extracted = '';
+                // Find all top-level span elements with text content
+                const topLevelSpans = [];
                 
-                for (const element of textElements) {
-                    // Only keep elements with actual text content
-                    if (element.textContent && element.textContent.trim()) {
-                        extracted += element.outerHTML;
+                // Function to find main spans (not nested within other spans)
+                const findMainSpans = (parent) => {
+                    // Check each child node
+                    for (const child of parent.children) {
+                        // If it's a span, add it to our collection
+                        if (child.tagName && child.tagName.toLowerCase() === 'span') {
+                            if (child.textContent && child.textContent.trim()) {
+                                topLevelSpans.push(child);
+                            }
+                        } else {
+                            // If it's not a span, recursively check its children
+                            findMainSpans(child);
+                        }
                     }
+                };
+                
+                // Start finding spans from the segment container
+                findMainSpans(segmentContainer);
+                
+                // If we didn't find any main spans, try getting all spans
+                if (topLevelSpans.length === 0) {
+                    const allSpans = segmentContainer.querySelectorAll('span');
+                    for (const span of allSpans) {
+                        if (span.textContent && span.textContent.trim()) {
+                            topLevelSpans.push(span);
+                        }
+                    }
+                }
+                
+                // Extract HTML from the spans
+                let extracted = '';
+                for (const span of topLevelSpans) {
+                    extracted += span.outerHTML;
                 }
                 
                 return extracted || null;
@@ -610,7 +637,7 @@ class FacebookScraper extends BaseScraper {
             // Parse the HTML using our helper method
             const parsedDescription = descriptionHtml ? 
                 this.parseAdDescription(descriptionHtml) : null;
-            
+                
             return { html: parsedDescription };
         } catch (error) {
             console.error('Error extracting slider ad description:', error);
@@ -619,24 +646,148 @@ class FacebookScraper extends BaseScraper {
     }
     
     parseAdDescription(htmlContent) {
-        // Replace <br> tags with newlines
-        let formatted = htmlContent.replace(/<br\s*\/?>/gi, '\n');
+        if (!htmlContent) return null;
         
-        // Remove all HTML tags but preserve the content
-        formatted = formatted.replace(/<[^>]*>/g, '');
+        // First replace all <br> tags with newline characters
+        let text = htmlContent.replace(/<br\s*\/?>/gi, '\n');
         
-        // Clean up whitespace
-        formatted = formatted.replace(/\s+/g, ' ');
+        // Remove all other HTML tags
+        text = text.replace(/<[^>]*>/g, '');
         
-        // Clean up consecutive newlines
-        formatted = formatted.replace(/\n{3,}/g, '\n\n');
+        // Decode HTML entities
+        text = text.replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
         
-        return formatted.trim();
+        // Clean up whitespace but preserve intentional newlines
+        text = text.replace(/[ \t]+/g, ' ');
+        
+        // Normalize multiple consecutive newlines to just two
+        text = text.replace(/\n{3,}/g, '\n\n');
+        
+        return text.trim();
     }
 
     async extractSliderVideoAds(html) {
         try {
-            return 'TODO: Implement slider video extraction';
+            const items = await this.page.evaluate((htmlContent, buttonTexts) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+                
+                // Helper method to parse video content from a div
+                const parseItemVideo = (divHtml) => {
+                    const container = document.createElement('div');
+                    container.innerHTML = divHtml;
+                    
+                    const videoElement = container.querySelector('video');
+                    if (!videoElement || !videoElement.src) {
+                        return null;
+                    }
+                    
+                    return {
+                        url: videoElement.src,
+                        type: 'video'
+                    };
+                };
+                
+                // Helper method to parse CTA content from a div
+                const parseItemCta = (divHtml) => {
+                    const container = document.createElement('div');
+                    container.innerHTML = divHtml;
+                    
+                    const result = {
+                        url: null,
+                        type: null,
+                        text: null
+                    };
+                    
+                    // Extract button texts
+                    const buttonElements = Array.from(container.querySelectorAll('[role="button"]'));
+                    let buttonTextsFound = [];
+                    
+                    buttonElements.forEach(button => {
+                        const text = button.textContent.trim();
+                        if (text && text !== 'Close') {
+                            buttonTextsFound.push(text);
+                        }
+                    });
+                    
+                    // Determine CTA type
+                    if (buttonTextsFound.length > 0) {
+                        const lastButtonText = buttonTextsFound[buttonTextsFound.length - 1];
+                        if (buttonTexts.includes(lastButtonText)) {
+                            result.type = lastButtonText;
+                            buttonTextsFound.pop();
+                        }
+                    }
+                    
+                    // Join remaining button texts as CTA text
+                    result.text = buttonTextsFound.join(' - ');
+                    
+                    // Extract URL from links
+                    const links = container.querySelectorAll('a[href]');
+                    if (links.length > 0) {
+                        const link = links[0];
+                        result.url = link.getAttribute('href') || null;
+                    }
+                    
+                    return result;
+                };
+                
+                // Find all elements with data-type="hscroll-child"
+                const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
+                console.log('Found', sliderItems.length, 'slider items');
+                
+                // Process each slider item
+                const extractedItems = [];
+                
+                for (let i = 0; i < sliderItems.length; i++) {
+                    const item = sliderItems[i];
+                    
+                    // Navigate down to find the content divs
+                    let currentElement = item.firstElementChild;
+                    if (!currentElement) continue;
+                    
+                    // First level
+                    if (currentElement.tagName.toLowerCase() !== 'div') continue;
+                    currentElement = currentElement.firstElementChild;
+                    if (!currentElement) continue;
+                    
+                    // Second level - should have two divs
+                    if (currentElement.tagName.toLowerCase() !== 'div') continue;
+                    const contentDivs = Array.from(currentElement.children).filter(
+                        el => el.tagName && el.tagName.toLowerCase() === 'div'
+                    );
+                    
+                    if (contentDivs.length < 2) continue;
+                    
+                    // Parse the first div for video
+                    const videoInfo = parseItemVideo(contentDivs[0].outerHTML);
+                    if (!videoInfo) continue;
+                    
+                    // Parse the second div for CTA
+                    const ctaInfo = parseItemCta(contentDivs[1].outerHTML);
+                    
+                    // Create the final item
+                    const extractedItem = {
+                        index: i,
+                        url: videoInfo.url,
+                        type: videoInfo.type,
+                        callToAction: ctaInfo
+                    };
+                    
+                    extractedItems.push(extractedItem);
+                }
+                
+                return extractedItems;
+            }, html, this.buttonTexts);
+            
+            console.log('Video items found:', items.length);
+            
+            return items;
         } catch (error) {
             console.error('Error extracting slider videos:', error);
             return [];
@@ -645,9 +796,23 @@ class FacebookScraper extends BaseScraper {
 
     async extractSliderImageAds(html) {
         try {
-            return 'TODO: Implement slider image extraction';
+            const items = await this.page.evaluate((htmlContent) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+                
+                // Find all elements with data-type="hscroll-child"
+                const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
+                
+                // Return the HTML of each item
+                return sliderItems.map((item, index) => ({
+                    index,
+                    html: item.outerHTML
+                }));
+            }, html);
+            
+            return items;
         } catch (error) {
-            console.error('Error extracting slider images:', error);
+            console.error('Error finding slider items:', error);
             return [];
         }
     }
