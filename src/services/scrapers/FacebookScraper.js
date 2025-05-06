@@ -115,6 +115,7 @@ class FacebookScraper extends BaseScraper {
                 },
                 callToAction: {
                     url: null,
+                    rawUrl: null,
                     type: null,
                     text: null
                 },
@@ -145,24 +146,17 @@ class FacebookScraper extends BaseScraper {
             // Check if this is a slider ad
             const sliderResult = await this.findSliderAd(result.html);
             if (sliderResult.isSlider) {
-                console.log(`Found slider ad with type: ${sliderResult.mediaType}`);
-                adData.type = `slider-${sliderResult.mediaType}`;
-                adData.media.type = `slider-${sliderResult.mediaType}`;
+                console.log(`Found slider ad`);
+                adData.type = 'slider';
+                adData.media.type = 'slider';
 
                 // Extract slider-specific content
                 const sliderDescription = await this.extractSliderAdDescription(result.html);
                 if (sliderDescription) adData.content.html = sliderDescription.html;
 
-                // Extract slider media based on type
-                if (sliderResult.mediaType === 'video') {
-                    const sliderVideos = await this.extractSliderMediaAds(result.html, 'video');
-                    adData.media.items = sliderVideos || [];
-                } else if (sliderResult.mediaType === 'image') {
-                    const sliderImages = await this.extractSliderMediaAds(result.html, 'image');
-                    adData.media.items = sliderImages || [];
-                }
-
-                
+                // Extract all slider media items (could be mix of images and videos)
+                const sliderItems = await this.extractSliderMediaAds(result.html);
+                adData.media.items = sliderItems || [];
             } else {
                 // Handle standard video or image ads
                 const videoInfo = await this.findVideoUrl(result.html);
@@ -190,6 +184,7 @@ class FacebookScraper extends BaseScraper {
                 const callToAction = await this.extractCallToAction(result.html, adData.type);
                 if (callToAction.text) adData.callToAction.text = callToAction.text;
                 if (callToAction.url) adData.callToAction.url = callToAction.url;
+                if (callToAction.rawUrl) adData.callToAction.rawUrl = callToAction.rawUrl;
                 if (callToAction.type) adData.callToAction.type = callToAction.type;
             }
 
@@ -215,8 +210,7 @@ class FacebookScraper extends BaseScraper {
 
                 // Default result
                 const result = {
-                    isSlider: false,
-                    mediaType: null
+                    isSlider: false
                 };
 
                 // If not a slider, return early
@@ -224,24 +218,14 @@ class FacebookScraper extends BaseScraper {
                     return result;
                 }
 
-                // It is a slider, now determine if it contains videos or images
+                // It is a slider
                 result.isSlider = true;
-
-                // Check if there's a video element in the slider
-                const videoElement = tempContainer.querySelector('video');
-                if (videoElement) {
-                    result.mediaType = 'video';
-                } else {
-                    // If no video, assume it's image-based
-                    result.mediaType = 'image';
-                }
-
                 return result;
             }, html);
 
             return sliderResult;
         } catch (error) {
-            return { isSlider: false, mediaType: null };
+            return { isSlider: false };
         }
     }
 
@@ -478,10 +462,10 @@ class FacebookScraper extends BaseScraper {
                     startPos = htmlString.indexOf(startTag);
                 }
 
-                if (startPos === -1) return { text: null, url: null, type: null };
+                if (startPos === -1) return { text: null, url: null, rawUrl: null, type: null };
 
                 const closePos = htmlString.indexOf('>Close<', startPos);
-                if (closePos === -1) return { text: null, url: null, type: null };
+                if (closePos === -1) return { text: null, url: null, rawUrl: null, type: null };
 
                 const segment = htmlString.substring(startPos, closePos);
                 const segmentContainer = document.createElement('div');
@@ -512,15 +496,41 @@ class FacebookScraper extends BaseScraper {
 
                 // Extract URL
                 let rawUrl = null;
+                let url = null;
                 const links = segmentContainer.querySelectorAll('a[href]');
                 if (links.length > 0) {
                     const link = links[0];
                     rawUrl = link.getAttribute('href') || null;
                 }
 
+                // Extract actual destination URL from Facebook's redirect URL
+                if (rawUrl && rawUrl.includes('facebook.com/')) {
+                    try {
+                        // Facebook often includes destination URL in the 'u' parameter
+                        const urlObj = new URL(rawUrl);
+                        if (urlObj.searchParams.has('u')) {
+                            const actualUrl = urlObj.searchParams.get('u');
+                            if (actualUrl) {
+                                url = decodeURIComponent(actualUrl);
+                            } else {
+                                url = rawUrl;
+                            }
+                        } else {
+                            url = rawUrl;
+                        }
+                    } catch (e) {
+                        // If URL parsing fails, keep the original URL
+                        url = rawUrl;
+                    }
+                } else if (rawUrl) {
+                    // Not a Facebook redirect URL, use as is
+                    url = rawUrl;
+                }
+
                 return {
                     text: ctaText || null,
-                    url: rawUrl,
+                    url: url,
+                    rawUrl: rawUrl,
                     type: ctaType || null
                 };
             }, html, adType, this.buttonTexts);
@@ -528,7 +538,7 @@ class FacebookScraper extends BaseScraper {
             return callToAction;
         } catch (error) {
             console.error('Error extracting call to action:', error);
-            return { text: null, url: null, type: null };
+            return { text: null, url: null, rawUrl: null, type: null };
         }
     }
 
@@ -569,33 +579,33 @@ class FacebookScraper extends BaseScraper {
             const descriptionHtml = await this.page.evaluate((htmlContent) => {
                 const tempContainer = document.createElement('div');
                 tempContainer.innerHTML = htmlContent;
-                
+
                 // Let's take a more direct approach by looking at the HTML structure
                 // Find text between "Sponsored" and navigation buttons directly
                 const htmlString = tempContainer.innerHTML;
-                
+
                 // Find "Sponsored" text position
                 const sponsoredIndex = htmlString.indexOf('>Sponsored<');
                 if (sponsoredIndex === -1) return null;
-                
+
                 // Find slider navigation button position
                 const navigationIndex = htmlString.indexOf('aria-label="Previous items"');
                 if (navigationIndex === -1) return null;
-                
+
                 // Make sure navigation comes after sponsored
                 if (sponsoredIndex >= navigationIndex) return null;
-                
+
                 // Extract the HTML segment between these positions
                 const startPos = sponsoredIndex + '>Sponsored<'.length;
                 const segment = htmlString.substring(startPos, navigationIndex);
-                
+
                 // Create a temporary container with this segment
                 const segmentContainer = document.createElement('div');
                 segmentContainer.innerHTML = segment;
-                
+
                 // Find all top-level span elements with text content
                 const topLevelSpans = [];
-                
+
                 // Function to find main spans (not nested within other spans)
                 const findMainSpans = (parent) => {
                     // Check each child node
@@ -611,10 +621,10 @@ class FacebookScraper extends BaseScraper {
                         }
                     }
                 };
-                
+
                 // Start finding spans from the segment container
                 findMainSpans(segmentContainer);
-                
+
                 // If we didn't find any main spans, try getting all spans
                 if (topLevelSpans.length === 0) {
                     const allSpans = segmentContainer.querySelectorAll('span');
@@ -624,36 +634,36 @@ class FacebookScraper extends BaseScraper {
                         }
                     }
                 }
-                
+
                 // Extract HTML from the spans
                 let extracted = '';
                 for (const span of topLevelSpans) {
                     extracted += span.outerHTML;
                 }
-                
+
                 return extracted || null;
             }, html);
-            
+
             // Parse the HTML using our helper method
-            const parsedDescription = descriptionHtml ? 
+            const parsedDescription = descriptionHtml ?
                 this.parseAdDescription(descriptionHtml) : null;
-                
+
             return { html: parsedDescription };
         } catch (error) {
             console.error('Error extracting slider ad description:', error);
             return { html: null };
         }
     }
-    
+
     parseAdDescription(htmlContent) {
         if (!htmlContent) return null;
-        
+
         // First replace all <br> tags with newline characters
         let text = htmlContent.replace(/<br\s*\/?>/gi, '\n');
-        
+
         // Remove all other HTML tags
         text = text.replace(/<[^>]*>/g, '');
-        
+
         // Decode HTML entities
         text = text.replace(/&nbsp;/g, ' ')
             .replace(/&amp;/g, '&')
@@ -661,82 +671,170 @@ class FacebookScraper extends BaseScraper {
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'");
-        
+
         // Clean up whitespace but preserve intentional newlines
         text = text.replace(/[ \t]+/g, ' ');
-        
+
         // Normalize multiple consecutive newlines to just two
         text = text.replace(/\n{3,}/g, '\n\n');
-        
+
         return text.trim();
     }
 
-    /**
-     * Extracts media items (videos or images) from a slider ad
-     * @param {string} html - HTML content of the ad
-     * @param {string} mediaType - Type of media to extract ('video' or 'image')
-     * @returns {Array} - Array of extracted media items with call-to-action info
-     */
-    async extractSliderMediaAds(html, mediaType) {
+    async extractSliderMediaAds(html) {
         try {
-            const items = await this.page.evaluate((htmlContent, buttonTexts, type) => {
+            const items = await this.page.evaluate((htmlContent, buttonTexts) => {
                 const tempContainer = document.createElement('div');
                 tempContainer.innerHTML = htmlContent;
-                
-                // Helper method to parse media content from a div based on type
-                const parseItemMedia = (divHtml, mediaType) => {
-                    const container = document.createElement('div');
-                    container.innerHTML = divHtml;
+
+                // Method to parse a slider video item
+                const parseSliderVideoItem = (item) => {
+                    // Navigate down to find the content divs
+                    let currentElement = item.firstElementChild;
+                    if (!currentElement) return null;
+
+                    // First level
+                    if (currentElement.tagName.toLowerCase() !== 'div') return null;
+                    currentElement = currentElement.firstElementChild;
+                    if (!currentElement) return null;
+
+                    // Second level - should have two divs
+                    if (currentElement.tagName.toLowerCase() !== 'div') return null;
+                    const contentDivs = Array.from(currentElement.children).filter(
+                        el => el.tagName && el.tagName.toLowerCase() === 'div'
+                    );
+
+                    if (contentDivs.length < 2) return null;
+
+                    // Extract video from first div
+                    const mediaDiv = contentDivs[0];
+                    const mediaContainer = document.createElement('div');
+                    mediaContainer.innerHTML = mediaDiv.outerHTML;
                     
-                    if (mediaType === 'video') {
-                        // Extract video
-                        const videoElement = container.querySelector('video');
-                        if (!videoElement || !videoElement.src) {
-                            return null;
+                    const videoElement = mediaContainer.querySelector('video');
+                    if (!videoElement || !videoElement.src) return null;
+
+                    const mediaInfo = {
+                        url: videoElement.src,
+                        type: 'video'
+                    };
+
+                    // Extract CTA from second div
+                    const ctaDiv = contentDivs[1];
+                    const ctaInfo = parseItemCta(ctaDiv.outerHTML);
+
+                    return {
+                        url: mediaInfo.url,
+                        type: mediaInfo.type,
+                        callToAction: {
+                            url: ctaInfo.url,
+                            rawUrl: ctaInfo.rawUrl,
+                            text: ctaInfo.text,
+                            type: ctaInfo.type
                         }
-                        
-                        return {
-                            url: videoElement.src,
-                            type: 'video'
-                        };
-                    } else if (mediaType === 'image') {
-                        // Extract image
-                        const imageElement = container.querySelector('img');
-                        if (!imageElement || !imageElement.src) {
-                            return null;
-                        }
-                        
-                        return {
-                            url: imageElement.src,
-                            type: 'image'
-                        };
-                    }
-                    
-                    return null;
+                    };
                 };
-                
+
+                // Method to parse a slider image item
+                const parseSliderImageItem = (item) => {
+                    // Structure for image items: div > div > a
+                    let currentElement = item.firstElementChild;
+                    if (!currentElement || currentElement.tagName.toLowerCase() !== 'div') return null;
+                    
+                    currentElement = currentElement.firstElementChild;
+                    if (!currentElement || currentElement.tagName.toLowerCase() !== 'div') return null;
+
+                    const linkElement = currentElement.querySelector('a');
+                    if (!linkElement) return null;
+
+                    // Within the a tag, we expect divs with the content
+                    const contentDivs = Array.from(linkElement.children).filter(
+                        el => el.tagName && el.tagName.toLowerCase() === 'div'
+                    );
+
+                    if (contentDivs.length < 2) return null;
+
+                    // First div should contain the image
+                    const imageDiv = contentDivs[0];
+                    const imageElement = imageDiv.querySelector('img');
+                    if (!imageElement || !imageElement.src) return null;
+
+                    const mediaInfo = {
+                        url: imageElement.src,
+                        type: 'image'
+                    };
+
+                    // Second div contains the CTA type/label
+                    const typeDiv = contentDivs[1];
+                    let ctaType = typeDiv.textContent.trim();
+                    if (!buttonTexts.includes(ctaType)) {
+                        ctaType = null;
+                    }
+
+                    // If there's a third div, it contains the CTA text
+                    let ctaText = null;
+                    if (contentDivs.length > 2) {
+                        const textDiv = contentDivs[2];
+                        ctaText = textDiv.textContent.trim();
+                    } else if (!ctaType) {
+                        // If no type was found, the second div might contain the text
+                        ctaText = typeDiv.textContent.trim();
+                    }
+
+                    // Extract URL from the link
+                    let rawUrl = linkElement.getAttribute('href') || null;
+                    let url = rawUrl;
+
+                    // Extract actual destination URL from Facebook's redirect URL
+                    if (rawUrl && rawUrl.includes('facebook.com/')) {
+                        try {
+                            const urlObj = new URL(rawUrl);
+                            if (urlObj.searchParams.has('u')) {
+                                const actualUrl = urlObj.searchParams.get('u');
+                                if (actualUrl) {
+                                    url = decodeURIComponent(actualUrl);
+                                }
+                            }
+                        } catch (e) {
+                            // If URL parsing fails, keep the original URL
+                        }
+                    }
+
+                    return {
+                        url: mediaInfo.url,
+                        type: mediaInfo.type,
+                        callToAction: {
+                            url: url,
+                            rawUrl: rawUrl,
+                            text: ctaText,
+                            type: ctaType
+                        }
+                    };
+                };
+
                 // Helper method to parse CTA content from a div
                 const parseItemCta = (divHtml) => {
                     const container = document.createElement('div');
                     container.innerHTML = divHtml;
-                    
+
                     const result = {
                         url: null,
+                        rawUrl: null,
                         type: null,
                         text: null
                     };
-                    
+
                     // Extract button texts
                     const buttonElements = Array.from(container.querySelectorAll('[role="button"]'));
                     let buttonTextsFound = [];
-                    
+
                     buttonElements.forEach(button => {
                         const text = button.textContent.trim();
                         if (text && text !== 'Close') {
                             buttonTextsFound.push(text);
                         }
                     });
-                    
+
                     // Determine CTA type
                     if (buttonTextsFound.length > 0) {
                         const lastButtonText = buttonTextsFound[buttonTextsFound.length - 1];
@@ -745,73 +843,82 @@ class FacebookScraper extends BaseScraper {
                             buttonTextsFound.pop();
                         }
                     }
-                    
+
                     // Join remaining button texts as CTA text
                     result.text = buttonTextsFound.join(' - ');
-                    
+
                     // Extract URL from links
                     const links = container.querySelectorAll('a[href]');
                     if (links.length > 0) {
                         const link = links[0];
-                        result.url = link.getAttribute('href') || null;
+                        let rawUrl = link.getAttribute('href') || null;
+                        
+                        // Store the original rawUrl
+                        result.rawUrl = rawUrl;
+
+                        // Extract actual destination URL from Facebook's redirect URL
+                        if (rawUrl && rawUrl.includes('facebook.com/')) {
+                            try {
+                                // Facebook often includes destination URL in the 'u' parameter
+                                const urlObj = new URL(rawUrl);
+                                if (urlObj.searchParams.has('u')) {
+                                    const actualUrl = urlObj.searchParams.get('u');
+                                    if (actualUrl) {
+                                        result.url = decodeURIComponent(actualUrl);
+                                    } else {
+                                        // If no 'u' parameter, use the raw URL
+                                        result.url = rawUrl;
+                                    }
+                                } else {
+                                    // If no 'u' parameter, use the raw URL
+                                    result.url = rawUrl;
+                                }
+                            } catch (e) {
+                                // If URL parsing fails, keep the original URL
+                                result.url = rawUrl;
+                            }
+                        } else {
+                            // Not a Facebook redirect URL, use as is
+                            result.url = rawUrl;
+                        }
                     }
-                    
+
                     return result;
                 };
-                
+
                 // Find all elements with data-type="hscroll-child"
                 const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
-                console.log(`Found ${sliderItems.length} slider items of type ${type}`);
-                
+                console.log(`Found ${sliderItems.length} slider items`);
+
                 // Process each slider item
                 const extractedItems = [];
-                
+
                 for (let i = 0; i < sliderItems.length; i++) {
                     const item = sliderItems[i];
-                    
-                    // Navigate down to find the content divs
-                    let currentElement = item.firstElementChild;
-                    if (!currentElement) continue;
-                    
-                    // First level
-                    if (currentElement.tagName.toLowerCase() !== 'div') continue;
-                    currentElement = currentElement.firstElementChild;
-                    if (!currentElement) continue;
-                    
-                    // Second level - should have two divs
-                    if (currentElement.tagName.toLowerCase() !== 'div') continue;
-                    const contentDivs = Array.from(currentElement.children).filter(
-                        el => el.tagName && el.tagName.toLowerCase() === 'div'
-                    );
-                    
-                    if (contentDivs.length < 2) continue;
-                    
-                    // Parse the first div for media
-                    const mediaInfo = parseItemMedia(contentDivs[0].outerHTML, type);
-                    if (!mediaInfo) continue;
-                    
-                    // Parse the second div for CTA
-                    const ctaInfo = parseItemCta(contentDivs[1].outerHTML);
-                    
-                    // Create the final item
-                    const extractedItem = {
-                        index: i,
-                        url: mediaInfo.url,
-                        type: mediaInfo.type,
-                        callToAction: ctaInfo
-                    };
-                    
-                    extractedItems.push(extractedItem);
+                    const itemHtml = item.innerHTML;
+                    let extractedItem = null;
+
+                    // First check if this item has a video element
+                    if (itemHtml.includes('<video')) {
+                        extractedItem = parseSliderVideoItem(item);
+                    } else {
+                        // If not a video, try to parse as an image
+                        extractedItem = parseSliderImageItem(item);
+                    }
+
+                    if (extractedItem) {
+                        extractedItem.index = i;
+                        extractedItems.push(extractedItem);
+                    }
                 }
-                
+
                 return extractedItems;
-            }, html, this.buttonTexts, mediaType);
-            
-            console.log(`${mediaType} items found:`, items.length);
-            
+            }, html, this.buttonTexts);
+
+            console.log(`Slider items found:`, items.length);
             return items;
         } catch (error) {
-            console.error(`Error extracting slider ${mediaType}:`, error);
+            console.error('Error extracting slider items:', error);
             return [];
         }
     }
