@@ -155,10 +155,10 @@ class FacebookScraper extends BaseScraper {
 
                 // Extract slider media based on type
                 if (sliderResult.mediaType === 'video') {
-                    const sliderVideos = await this.extractSliderVideoAds(result.html);
+                    const sliderVideos = await this.extractSliderMediaAds(result.html, 'video');
                     adData.media.items = sliderVideos || [];
                 } else if (sliderResult.mediaType === 'image') {
-                    const sliderImages = await this.extractSliderImageAds(result.html);
+                    const sliderImages = await this.extractSliderMediaAds(result.html, 'image');
                     adData.media.items = sliderImages || [];
                 }
 
@@ -671,26 +671,48 @@ class FacebookScraper extends BaseScraper {
         return text.trim();
     }
 
-    async extractSliderVideoAds(html) {
+    /**
+     * Extracts media items (videos or images) from a slider ad
+     * @param {string} html - HTML content of the ad
+     * @param {string} mediaType - Type of media to extract ('video' or 'image')
+     * @returns {Array} - Array of extracted media items with call-to-action info
+     */
+    async extractSliderMediaAds(html, mediaType) {
         try {
-            const items = await this.page.evaluate((htmlContent, buttonTexts) => {
+            const items = await this.page.evaluate((htmlContent, buttonTexts, type) => {
                 const tempContainer = document.createElement('div');
                 tempContainer.innerHTML = htmlContent;
                 
-                // Helper method to parse video content from a div
-                const parseItemVideo = (divHtml) => {
+                // Helper method to parse media content from a div based on type
+                const parseItemMedia = (divHtml, mediaType) => {
                     const container = document.createElement('div');
                     container.innerHTML = divHtml;
                     
-                    const videoElement = container.querySelector('video');
-                    if (!videoElement || !videoElement.src) {
-                        return null;
+                    if (mediaType === 'video') {
+                        // Extract video
+                        const videoElement = container.querySelector('video');
+                        if (!videoElement || !videoElement.src) {
+                            return null;
+                        }
+                        
+                        return {
+                            url: videoElement.src,
+                            type: 'video'
+                        };
+                    } else if (mediaType === 'image') {
+                        // Extract image
+                        const imageElement = container.querySelector('img');
+                        if (!imageElement || !imageElement.src) {
+                            return null;
+                        }
+                        
+                        return {
+                            url: imageElement.src,
+                            type: 'image'
+                        };
                     }
                     
-                    return {
-                        url: videoElement.src,
-                        type: 'video'
-                    };
+                    return null;
                 };
                 
                 // Helper method to parse CTA content from a div
@@ -739,7 +761,7 @@ class FacebookScraper extends BaseScraper {
                 
                 // Find all elements with data-type="hscroll-child"
                 const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
-                console.log('Found', sliderItems.length, 'slider items');
+                console.log(`Found ${sliderItems.length} slider items of type ${type}`);
                 
                 // Process each slider item
                 const extractedItems = [];
@@ -764,9 +786,9 @@ class FacebookScraper extends BaseScraper {
                     
                     if (contentDivs.length < 2) continue;
                     
-                    // Parse the first div for video
-                    const videoInfo = parseItemVideo(contentDivs[0].outerHTML);
-                    if (!videoInfo) continue;
+                    // Parse the first div for media
+                    const mediaInfo = parseItemMedia(contentDivs[0].outerHTML, type);
+                    if (!mediaInfo) continue;
                     
                     // Parse the second div for CTA
                     const ctaInfo = parseItemCta(contentDivs[1].outerHTML);
@@ -774,8 +796,8 @@ class FacebookScraper extends BaseScraper {
                     // Create the final item
                     const extractedItem = {
                         index: i,
-                        url: videoInfo.url,
-                        type: videoInfo.type,
+                        url: mediaInfo.url,
+                        type: mediaInfo.type,
                         callToAction: ctaInfo
                     };
                     
@@ -783,36 +805,13 @@ class FacebookScraper extends BaseScraper {
                 }
                 
                 return extractedItems;
-            }, html, this.buttonTexts);
+            }, html, this.buttonTexts, mediaType);
             
-            console.log('Video items found:', items.length);
-            
-            return items;
-        } catch (error) {
-            console.error('Error extracting slider videos:', error);
-            return [];
-        }
-    }
-
-    async extractSliderImageAds(html) {
-        try {
-            const items = await this.page.evaluate((htmlContent) => {
-                const tempContainer = document.createElement('div');
-                tempContainer.innerHTML = htmlContent;
-                
-                // Find all elements with data-type="hscroll-child"
-                const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
-                
-                // Return the HTML of each item
-                return sliderItems.map((item, index) => ({
-                    index,
-                    html: item.outerHTML
-                }));
-            }, html);
+            console.log(`${mediaType} items found:`, items.length);
             
             return items;
         } catch (error) {
-            console.error('Error finding slider items:', error);
+            console.error(`Error extracting slider ${mediaType}:`, error);
             return [];
         }
     }
