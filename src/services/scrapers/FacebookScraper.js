@@ -687,6 +687,26 @@ class FacebookScraper extends BaseScraper {
                 const tempContainer = document.createElement('div');
                 tempContainer.innerHTML = htmlContent;
 
+                // Helper method to extract destination URL from Facebook redirect URL
+                const extractDestinationUrl = (rawUrl) => {
+                    if (!rawUrl) return { url: null, rawUrl: null };
+                    
+                    let url = rawUrl;
+                    try {
+                        const urlObj = new URL(rawUrl);
+                        if (urlObj.searchParams.has('u')) {
+                            const actualUrl = urlObj.searchParams.get('u');
+                            if (actualUrl) {
+                                url = decodeURIComponent(actualUrl);
+                            }
+                        }
+                    } catch (e) {
+                        // If URL parsing fails, keep the original URL
+                    }
+                    
+                    return { url, rawUrl };
+                };
+
                 // Method to parse a slider video item
                 const parseSliderVideoItem = (item) => {
                     // Navigate down to find the content divs
@@ -719,9 +739,53 @@ class FacebookScraper extends BaseScraper {
                         type: 'video'
                     };
 
-                    // Extract CTA from second div
+                    // Extract CTA directly from second div
                     const ctaDiv = contentDivs[1];
-                    const ctaInfo = parseItemCta(ctaDiv.outerHTML);
+                    const ctaContainer = document.createElement('div');
+                    ctaContainer.innerHTML = ctaDiv.outerHTML;
+
+                    // Initialize CTA info
+                    const ctaInfo = {
+                        url: null,
+                        rawUrl: null,
+                        type: null,
+                        text: null
+                    };
+
+                    // Extract button texts
+                    const buttonElements = Array.from(ctaContainer.querySelectorAll('[role="button"]'));
+                    let buttonTextsFound = [];
+
+                    buttonElements.forEach(button => {
+                        const text = button.textContent.trim();
+                        if (text && text !== 'Close') {
+                            buttonTextsFound.push(text);
+                        }
+                    });
+
+                    // Determine CTA type
+                    if (buttonTextsFound.length > 0) {
+                        const lastButtonText = buttonTextsFound[buttonTextsFound.length - 1];
+                        if (buttonTexts.includes(lastButtonText)) {
+                            ctaInfo.type = lastButtonText;
+                            buttonTextsFound.pop();
+                        }
+                    }
+
+                    // Join remaining button texts as CTA text
+                    ctaInfo.text = buttonTextsFound.join(' - ');
+
+                    // Extract URL from links
+                    const links = ctaContainer.querySelectorAll('a[href]');
+                    if (links.length > 0) {
+                        const link = links[0];
+                        let rawUrl = link.getAttribute('href') || null;
+                        
+                        // Process URL using the helper method
+                        const urlInfo = extractDestinationUrl(rawUrl);
+                        ctaInfo.url = urlInfo.url;
+                        ctaInfo.rawUrl = urlInfo.rawUrl;
+                    }
 
                     return {
                         url: mediaInfo.url,
@@ -764,39 +828,56 @@ class FacebookScraper extends BaseScraper {
                         type: 'image'
                     };
 
-                    // Second div contains the CTA type/label
-                    const typeDiv = contentDivs[1];
-                    let ctaType = typeDiv.textContent.trim();
-                    if (!buttonTexts.includes(ctaType)) {
-                        ctaType = null;
-                    }
+                    // Initialize CTA info
+                    const ctaInfo = {
+                        url: null,
+                        rawUrl: null,
+                        type: null,
+                        text: ''
+                    };
 
-                    // If there's a third div, it contains the CTA text
-                    let ctaText = null;
-                    if (contentDivs.length > 2) {
-                        const textDiv = contentDivs[2];
-                        ctaText = textDiv.textContent.trim();
-                    } else if (!ctaType) {
-                        // If no type was found, the second div might contain the text
-                        ctaText = typeDiv.textContent.trim();
-                    }
-
-                    // Extract URL from the link
+                    // Get the raw URL from the link href and process it
                     let rawUrl = linkElement.getAttribute('href') || null;
-                    let url = rawUrl;
+                    const urlInfo = extractDestinationUrl(rawUrl);
+                    ctaInfo.url = urlInfo.url;
+                    ctaInfo.rawUrl = urlInfo.rawUrl;
 
-                    // Extract actual destination URL from Facebook's redirect URL
-                    if (rawUrl && rawUrl.includes('facebook.com/')) {
-                        try {
-                            const urlObj = new URL(rawUrl);
-                            if (urlObj.searchParams.has('u')) {
-                                const actualUrl = urlObj.searchParams.get('u');
-                                if (actualUrl) {
-                                    url = decodeURIComponent(actualUrl);
-                                }
+                    // Second div may contain the CTA type/text
+                    if (contentDivs.length >= 2) {
+                        const textDiv = contentDivs[1];
+                        const divText = textDiv.textContent.trim();
+                        
+                        // Check if the text contains a known CTA type
+                        let foundType = null;
+                        for (const type of buttonTexts) {
+                            if (divText.endsWith(type)) {
+                                foundType = type;
+                                // Remove type from the text to get clean CTA text
+                                const textWithoutType = divText.substring(0, divText.length - type.length).trim();
+                                ctaInfo.text = textWithoutType;
+                                break;
                             }
-                        } catch (e) {
-                            // If URL parsing fails, keep the original URL
+                        }
+                        
+                        if (foundType) {
+                            ctaInfo.type = foundType;
+                        } else {
+                            // If no type found, the text is the CTA text
+                            ctaInfo.text = divText;
+                        }
+                    }
+
+                    // If there's a third div, it contains additional CTA text
+                    if (contentDivs.length >= 3) {
+                        const additionalTextDiv = contentDivs[2];
+                        const additionalText = additionalTextDiv.textContent.trim();
+                        if (additionalText) {
+                            // Append to existing text if any
+                            if (ctaInfo.text) {
+                                ctaInfo.text = `${ctaInfo.text} - ${additionalText}`;
+                            } else {
+                                ctaInfo.text = additionalText;
+                            }
                         }
                     }
 
@@ -804,86 +885,12 @@ class FacebookScraper extends BaseScraper {
                         url: mediaInfo.url,
                         type: mediaInfo.type,
                         callToAction: {
-                            url: url,
-                            rawUrl: rawUrl,
-                            text: ctaText,
-                            type: ctaType
+                            url: ctaInfo.url,
+                            rawUrl: ctaInfo.rawUrl,
+                            text: ctaInfo.text,
+                            type: ctaInfo.type
                         }
                     };
-                };
-
-                // Helper method to parse CTA content from a div
-                const parseItemCta = (divHtml) => {
-                    const container = document.createElement('div');
-                    container.innerHTML = divHtml;
-
-                    const result = {
-                        url: null,
-                        rawUrl: null,
-                        type: null,
-                        text: null
-                    };
-
-                    // Extract button texts
-                    const buttonElements = Array.from(container.querySelectorAll('[role="button"]'));
-                    let buttonTextsFound = [];
-
-                    buttonElements.forEach(button => {
-                        const text = button.textContent.trim();
-                        if (text && text !== 'Close') {
-                            buttonTextsFound.push(text);
-                        }
-                    });
-
-                    // Determine CTA type
-                    if (buttonTextsFound.length > 0) {
-                        const lastButtonText = buttonTextsFound[buttonTextsFound.length - 1];
-                        if (buttonTexts.includes(lastButtonText)) {
-                            result.type = lastButtonText;
-                            buttonTextsFound.pop();
-                        }
-                    }
-
-                    // Join remaining button texts as CTA text
-                    result.text = buttonTextsFound.join(' - ');
-
-                    // Extract URL from links
-                    const links = container.querySelectorAll('a[href]');
-                    if (links.length > 0) {
-                        const link = links[0];
-                        let rawUrl = link.getAttribute('href') || null;
-                        
-                        // Store the original rawUrl
-                        result.rawUrl = rawUrl;
-
-                        // Extract actual destination URL from Facebook's redirect URL
-                        if (rawUrl && rawUrl.includes('facebook.com/')) {
-                            try {
-                                // Facebook often includes destination URL in the 'u' parameter
-                                const urlObj = new URL(rawUrl);
-                                if (urlObj.searchParams.has('u')) {
-                                    const actualUrl = urlObj.searchParams.get('u');
-                                    if (actualUrl) {
-                                        result.url = decodeURIComponent(actualUrl);
-                                    } else {
-                                        // If no 'u' parameter, use the raw URL
-                                        result.url = rawUrl;
-                                    }
-                                } else {
-                                    // If no 'u' parameter, use the raw URL
-                                    result.url = rawUrl;
-                                }
-                            } catch (e) {
-                                // If URL parsing fails, keep the original URL
-                                result.url = rawUrl;
-                            }
-                        } else {
-                            // Not a Facebook redirect URL, use as is
-                            result.url = rawUrl;
-                        }
-                    }
-
-                    return result;
                 };
 
                 // Find all elements with data-type="hscroll-child"
