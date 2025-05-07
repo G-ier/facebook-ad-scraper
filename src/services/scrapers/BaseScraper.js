@@ -33,7 +33,9 @@ async function applyFingerprint(page, fingerprint) {
     await page.setViewport(fingerprint.viewport);
 }
 
+// Simplified BaseScraper class with focus on reliability
 class BaseScraper {
+    
     constructor(config) {
         // Merge default config, environment config, and user config
         const baseConfig = getConfig();
@@ -47,6 +49,8 @@ class BaseScraper {
                 rotateFingerprint: baseConfig.browser.rotateFingerprint,
                 minDelay: baseConfig.browser.minDelay,
                 maxDelay: baseConfig.browser.maxDelay,
+                args: baseConfig.browser.args || [],
+                executablePath: baseConfig.browser.executablePath || null,
                 ...config.browser      // Allow user to override defaults
             },
             ...config               // Include any other config options
@@ -66,36 +70,95 @@ class BaseScraper {
     // Initialize the browser with anti-detection measures
     async initialize() {
         try {
+            console.log('Initializing browser with anti-detection measures');
+            
+            // Convert headless option to use new headless mode if true
+            let headlessOption = this.config.browser.headless;
+            if (headlessOption === true) {
+                headlessOption = "new";
+            }
+            
             // Browser launch options for avoiding detection
             const launchOptions = {
-                headless: this.config.browser.headless,
+                headless: headlessOption,
                 args: [
                     '--no-sandbox',                    // Disable Chrome's sandbox for better performance
                     '--disable-setuid-sandbox',        // Disable setuid sandbox (Linux only)
                     '--disable-infobars',              // Hide automation infobar
                     '--window-position=0,0',           // Set window position
-                    '--ignore-certifcate-errors',      // Ignore SSL certificate errors
-                    '--ignore-certifcate-errors-spki-list', // Ignore certificate errors in SPKI list
-                    '--disable-blink-features=AutomationControlled' // Hide automation flags
-                ]
+                    '--ignore-certificate-errors',     // Ignore SSL certificate errors
+                    '--ignore-certificate-errors-spki-list', // Ignore certificate errors in SPKI list
+                    '--disable-blink-features=AutomationControlled', // Hide automation flags
+                    '--disable-dev-shm-usage',         // Overcome limited /dev/shm in Docker
+                    '--disable-accelerated-2d-canvas', // Reduce memory usage
+                    '--no-first-run',                  // Skip first run wizards
+                    '--no-zygote',                     // Don't use a zygote process for launching new processes
+                    ...(this.config.browser.args || [])  // Additional args from config
+                ],
             };
+            
+            // Use executable path if provided
+            if (this.config.browser.executablePath) {
+                console.log(`Using Chrome executable path: ${this.config.browser.executablePath}`);
+                launchOptions.executablePath = this.config.browser.executablePath;
+            }
 
-            // Launch browser with stealth or regular puppeteer
-            this.browser = this.config.browser.stealth
-                ? await puppeteerExtra.launch(launchOptions)
-                : await puppeteer.launch(launchOptions);
-
-            // Create new page and set timeout
+            // Launch browser with managed retries
+            console.log('Launching browser with options:', JSON.stringify({
+                headless: launchOptions.headless,
+                stealth: this.config.browser.stealth,
+                executablePath: launchOptions.executablePath ? '(custom path)' : '(default)',
+                args: launchOptions.args.slice(0, 3) + '...' // Just show first few args to keep log clean
+            }, null, 2));
+            
+            let attempts = 0;
+            const maxAttempts = 2;
+            
+            while (attempts < maxAttempts) {
+                try {
+                    // Use stealth or regular puppeteer based on config
+                    this.browser = this.config.browser.stealth
+                        ? await puppeteerExtra.launch(launchOptions)
+                        : await puppeteer.launch(launchOptions);
+                    break;
+                } catch (err) {
+                    attempts++;
+                    console.error(`Browser launch attempt ${attempts} failed: ${err.message}`);
+                    
+                    if (attempts >= maxAttempts) {
+                        throw err;
+                    }
+                    await sleep(1000);
+                }
+            }
+            
+            // Create new page with appropriate timeouts
+            console.log('Creating new page...');
             this.page = await this.browser.newPage();
             await this.page.setDefaultTimeout(this.config.browser.timeout);
-
+            await this.page.setDefaultNavigationTimeout(this.config.browser.timeout);
+            
+            // Add error handler for the page
+            this.page.on('error', err => {
+                console.error('Page error:', err);
+            });
+            
             // Apply anti-detection measures
             await this.rotateFingerprint();
             await this.setupPage();
-
+            
+            console.log('Browser initialized successfully');
             return true;
         } catch (error) {
             console.error('Failed to initialize scraper:', error);
+            if (this.browser) {
+                try {
+                    await this.browser.close();
+                } catch (closeError) {
+                    console.error('Error closing browser:', closeError);
+                }
+                this.browser = null;
+            }
             throw error;
         }
     }
@@ -162,7 +225,16 @@ class BaseScraper {
     // Clean up by closing the browser
     async close() {
         if (this.browser) {
-            await this.browser.close();
+            try {
+                await this.browser.close();
+                this.browser = null;
+                this.page = null;
+                console.log('Browser closed successfully');
+            } catch (error) {
+                console.error('Error while closing browser:', error);
+                this.browser = null;
+                this.page = null;
+            }
         }
     }
 }

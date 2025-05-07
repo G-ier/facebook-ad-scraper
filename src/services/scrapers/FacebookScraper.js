@@ -7,6 +7,11 @@ const { waitForPageLoad } = require('../../utils/scraping-helpers');
  * Extracts ad information from Facebook Ad Library pages
  */
 class FacebookScraper extends BaseScraper {
+    
+    /**
+     * Constructor for FacebookScraper
+     * @param {Object} config - Configuration object for the scraper
+     */
     constructor(config) {
         super(config);
         this.htmlContent = null;
@@ -54,7 +59,7 @@ class FacebookScraper extends BaseScraper {
 
             const adData = await this.extractAdData();
             console.log('Extraction complete');
-            console.log(adData);
+            console.log(JSON.stringify(adData, null, 2));
             return adData;
         } catch (error) {
             console.error('Error scraping Facebook content:', error);
@@ -104,7 +109,7 @@ class FacebookScraper extends BaseScraper {
                     avatar: null
                 },
                 content: {
-                    html: null
+                    text: null
                 },
                 runningInfo: {
                     startDate: null,
@@ -112,6 +117,7 @@ class FacebookScraper extends BaseScraper {
                 },
                 callToAction: {
                     url: null,
+                    rawUrl: null,
                     type: null,
                     text: null
                 },
@@ -122,25 +128,7 @@ class FacebookScraper extends BaseScraper {
                 return adData;
             }
 
-            // Extract media information (video or image)
-            const videoInfo = await this.findVideoUrl(result.html);
-            if (videoInfo && videoInfo.src) {
-                adData.type = 'video';
-                adData.media.type = 'video';
-                adData.media.url = videoInfo.src;
-                if (videoInfo.poster) {
-                    adData.media.posterUrl = videoInfo.poster;
-                }
-            } else {
-                const imageUrl = await this.findImageUrl(result.html);
-                if (imageUrl) {
-                    adData.type = 'image';
-                    adData.media.type = 'image';
-                    adData.media.url = imageUrl;
-                }
-            }
-
-            // Extract other ad details
+            // First, extract common data for all ad types
             const libraryId = await this.extractLibraryId(result.html);
             if (libraryId) adData.libraryId = libraryId;
 
@@ -154,16 +142,59 @@ class FacebookScraper extends BaseScraper {
             if (advertiserInfo.name) adData.advertiser.name = advertiserInfo.name;
             if (advertiserInfo.avatar) adData.advertiser.avatar = advertiserInfo.avatar;
 
-            const descriptionResult = await this.extractAdDescription(result.html, adData.type);
-            if (descriptionResult) adData.content.html = descriptionResult.html;
-
-            const callToAction = await this.extractCallToAction(result.html, adData.type);
-            if (callToAction.text) adData.callToAction.text = callToAction.text;
-            if (callToAction.url) adData.callToAction.url = callToAction.url;
-            if (callToAction.type) adData.callToAction.type = callToAction.type;
-
             const platforms = await this.detectPlatforms(result.html);
             if (platforms && platforms.length > 0) adData.platforms = platforms;
+
+            // Check if this is a slider ad
+            const sliderResult = await this.findSliderAd(result.html);
+            if (sliderResult.isSlider) {
+                console.log(`Found slider ad`);
+                adData.type = 'slider';
+                
+                // For slider ads, we only need the media.items array, not type or url
+                delete adData.media.type;
+                delete adData.media.url;
+                
+                // Remove callToAction from the main object since it's in each media item
+                delete adData.callToAction;
+
+                // Extract slider-specific content
+                const sliderDescription = await this.extractSliderAdDescription(result.html);
+                if (sliderDescription) adData.content.text = sliderDescription.text;
+
+                // Extract all slider media items (could be mix of images and videos)
+                const sliderItems = await this.extractSliderMediaAds(result.html);
+                adData.media.items = sliderItems || [];
+            } else {
+                // Handle standard video or image ads
+                const videoInfo = await this.findVideoUrl(result.html);
+                if (videoInfo && videoInfo.src) {
+                    adData.type = 'video';
+                    adData.media.type = 'video';
+                    adData.media.url = videoInfo.src;
+                    if (videoInfo.poster) {
+                        adData.media.posterUrl = videoInfo.poster;
+                    }
+                } else {
+                    const imageUrl = await this.findImageUrl(result.html);
+                    if (imageUrl) {
+                        adData.type = 'image';
+                        adData.media.type = 'image';
+                        adData.media.url = imageUrl;
+                    }
+                }
+
+                // Extract description for standard ads
+                const descriptionResult = await this.extractAdDescription(result.html, adData.type);
+                if (descriptionResult) adData.content.text = descriptionResult.text;
+
+                // Extract call-to-action for standard ads
+                const callToAction = await this.extractCallToAction(result.html, adData.type);
+                if (callToAction.text) adData.callToAction.text = callToAction.text;
+                if (callToAction.url) adData.callToAction.url = callToAction.url;
+                if (callToAction.rawUrl) adData.callToAction.rawUrl = callToAction.rawUrl;
+                if (callToAction.type) adData.callToAction.type = callToAction.type;
+            }
 
             return adData;
         } catch (error) {
@@ -175,9 +206,37 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts video URL from ad HTML
-     */
+    async findSliderAd(html) {
+        try {
+            const sliderResult = await this.page.evaluate((htmlContent) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+
+                // Look for navigation buttons that indicate a slider
+                const prevButton = tempContainer.querySelector('div[aria-label="Previous items"]');
+                const nextButton = tempContainer.querySelector('div[aria-label="Next items"]');
+
+                // Default result
+                const result = {
+                    isSlider: false
+                };
+
+                // If not a slider, return early
+                if (!prevButton || !nextButton) {
+                    return result;
+                }
+
+                // It is a slider
+                result.isSlider = true;
+                return result;
+            }, html);
+
+            return sliderResult;
+        } catch (error) {
+            return { isSlider: false };
+        }
+    }
+
     async findVideoUrl(html) {
         try {
             const videoInfo = await this.page.evaluate((htmlContent) => {
@@ -200,9 +259,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts image URL from ad HTML
-     */
     async findImageUrl(html) {
         try {
             const imageUrl = await this.page.evaluate((htmlContent) => {
@@ -244,9 +300,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad library ID from HTML
-     */
     async extractLibraryId(html) {
         try {
             const libraryId = await this.page.evaluate((htmlContent) => {
@@ -265,9 +318,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad running information (start date, active time)
-     */
     async extractRunningInfo(html) {
         try {
             const runningInfo = await this.page.evaluate((htmlContent) => {
@@ -301,9 +351,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts advertiser information (name, avatar)
-     */
     async extractAdvertiserInfo(html) {
         try {
             const advertiserInfo = await this.page.evaluate((htmlContent) => {
@@ -354,9 +401,6 @@ class FacebookScraper extends BaseScraper {
         }
     }
 
-    /**
-     * Extracts ad description content
-     */
     async extractAdDescription(html, adType) {
         try {
             const result = await this.page.evaluate((htmlContent, adType) => {
@@ -400,19 +444,21 @@ class FacebookScraper extends BaseScraper {
                     ? checkContainer.innerHTML
                     : extractedHtml;
 
-                return { html: finalHtml || null };
+                return { text: finalHtml || null };
             }, html, adType);
+
+            // Parse the extracted HTML using the same method used for slider ads
+            if (result && result.text) {
+                result.text = this.parseAdDescription(result.text);
+            }
 
             return result;
         } catch (error) {
             console.error('Error extracting ad description:', error);
-            return { html: null };
+            return { text: null };
         }
     }
 
-    /**
-     * Extracts call-to-action information (text, URL, type)
-     */
     async extractCallToAction(html, adType) {
         try {
             const callToAction = await this.page.evaluate((htmlContent, adType, buttonTexts) => {
@@ -429,10 +475,10 @@ class FacebookScraper extends BaseScraper {
                     startPos = htmlString.indexOf(startTag);
                 }
 
-                if (startPos === -1) return { text: null, url: null, type: null };
+                if (startPos === -1) return { text: null, url: null, rawUrl: null, type: null };
 
                 const closePos = htmlString.indexOf('>Close<', startPos);
-                if (closePos === -1) return { text: null, url: null, type: null };
+                if (closePos === -1) return { text: null, url: null, rawUrl: null, type: null };
 
                 const segment = htmlString.substring(startPos, closePos);
                 const segmentContainer = document.createElement('div');
@@ -463,15 +509,41 @@ class FacebookScraper extends BaseScraper {
 
                 // Extract URL
                 let rawUrl = null;
+                let url = null;
                 const links = segmentContainer.querySelectorAll('a[href]');
                 if (links.length > 0) {
                     const link = links[0];
                     rawUrl = link.getAttribute('href') || null;
                 }
 
+                // Extract actual destination URL from Facebook's redirect URL
+                if (rawUrl && rawUrl.includes('facebook.com/')) {
+                    try {
+                        // Facebook often includes destination URL in the 'u' parameter
+                        const urlObj = new URL(rawUrl);
+                        if (urlObj.searchParams.has('u')) {
+                            const actualUrl = urlObj.searchParams.get('u');
+                            if (actualUrl) {
+                                url = decodeURIComponent(actualUrl);
+                            } else {
+                                url = rawUrl;
+                            }
+                        } else {
+                            url = rawUrl;
+                        }
+                    } catch (e) {
+                        // If URL parsing fails, keep the original URL
+                        url = rawUrl;
+                    }
+                } else if (rawUrl) {
+                    // Not a Facebook redirect URL, use as is
+                    url = rawUrl;
+                }
+
                 return {
                     text: ctaText || null,
-                    url: rawUrl,
+                    url: url,
+                    rawUrl: rawUrl,
                     type: ctaType || null
                 };
             }, html, adType, this.buttonTexts);
@@ -479,13 +551,10 @@ class FacebookScraper extends BaseScraper {
             return callToAction;
         } catch (error) {
             console.error('Error extracting call to action:', error);
-            return { text: null, url: null, type: null };
+            return { text: null, url: null, rawUrl: null, type: null };
         }
     }
 
-    /**
-     * Detects platforms using CSS mask positions
-     */
     async detectPlatforms(html) {
         try {
             const platforms = await this.page.evaluate((htmlContent) => {
@@ -514,6 +583,357 @@ class FacebookScraper extends BaseScraper {
             return platforms;
         } catch (error) {
             console.error('Error detecting platforms:', error);
+            return [];
+        }
+    }
+
+    async extractSliderAdDescription(html) {
+        try {
+            const descriptionText = await this.page.evaluate((htmlContent) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+
+                // Let's take a more direct approach by looking at the HTML structure
+                // Find text between "Sponsored" and navigation buttons directly
+                const htmlString = tempContainer.innerHTML;
+
+                // Find "Sponsored" text position
+                const sponsoredIndex = htmlString.indexOf('>Sponsored<');
+                if (sponsoredIndex === -1) return null;
+
+                // Find slider navigation button position
+                const navigationIndex = htmlString.indexOf('aria-label="Previous items"');
+                if (navigationIndex === -1) return null;
+
+                // Make sure navigation comes after sponsored
+                if (sponsoredIndex >= navigationIndex) return null;
+
+                // Extract the HTML segment between these positions
+                const startPos = sponsoredIndex + '>Sponsored<'.length;
+                const segment = htmlString.substring(startPos, navigationIndex);
+
+                // Create a temporary container with this segment
+                const segmentContainer = document.createElement('div');
+                segmentContainer.innerHTML = segment;
+
+                // Find all top-level span elements with text content
+                const topLevelSpans = [];
+
+                // Function to find main spans (not nested within other spans)
+                const findMainSpans = (parent) => {
+                    // Check each child node
+                    for (const child of parent.children) {
+                        // If it's a span, add it to our collection
+                        if (child.tagName && child.tagName.toLowerCase() === 'span') {
+                            if (child.textContent && child.textContent.trim()) {
+                                topLevelSpans.push(child);
+                            }
+                        } else {
+                            // If it's not a span, recursively check its children
+                            findMainSpans(child);
+                        }
+                    }
+                };
+
+                // Start finding spans from the segment container
+                findMainSpans(segmentContainer);
+
+                // If we didn't find any main spans, try getting all spans
+                if (topLevelSpans.length === 0) {
+                    const allSpans = segmentContainer.querySelectorAll('span');
+                    for (const span of allSpans) {
+                        if (span.textContent && span.textContent.trim()) {
+                            topLevelSpans.push(span);
+                        }
+                    }
+                }
+
+                // Extract HTML from the spans
+                let extracted = '';
+                for (const span of topLevelSpans) {
+                    extracted += span.outerHTML;
+                }
+
+                return extracted || null;
+            }, html);
+
+            // Parse the HTML using our helper method
+            const parsedDescription = descriptionText ?
+                this.parseAdDescription(descriptionText) : null;
+
+            return { text: parsedDescription };
+        } catch (error) {
+            console.error('Error extracting slider ad description:', error);
+            return { text: null };
+        }
+    }
+
+    parseAdDescription(text) {
+        if (!text) return null;
+
+        // First replace all <br> tags with newline characters (in case HTML is passed)
+        let processedText = text.replace(/<br\s*\/?>/gi, '\n');
+
+        // Remove all HTML tags
+        processedText = processedText.replace(/<[^>]*>/g, '');
+
+        // Decode HTML entities
+        processedText = processedText.replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+
+        // Clean up whitespace but preserve intentional newlines
+        processedText = processedText.replace(/[ \t]+/g, ' ');
+
+        // Normalize multiple consecutive newlines to just two
+        processedText = processedText.replace(/\n{3,}/g, '\n\n');
+
+        return processedText.trim();
+    }
+
+    async extractSliderMediaAds(html) {
+        try {
+            const items = await this.page.evaluate((htmlContent, buttonTexts) => {
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+
+                // Helper method to extract destination URL from Facebook redirect URL
+                const extractDestinationUrl = (rawUrl) => {
+                    if (!rawUrl) return { url: null, rawUrl: null };
+                    
+                    let url = rawUrl;
+                    try {
+                        const urlObj = new URL(rawUrl);
+                        if (urlObj.searchParams.has('u')) {
+                            const actualUrl = urlObj.searchParams.get('u');
+                            if (actualUrl) {
+                                url = decodeURIComponent(actualUrl);
+                            }
+                        }
+                    } catch (e) {
+                        // If URL parsing fails, keep the original URL
+                    }
+                    
+                    return { url, rawUrl };
+                };
+
+                // Method to parse a slider video item
+                const parseSliderVideoItem = (item) => {
+                    // Navigate down to find the content divs
+                    let currentElement = item.firstElementChild;
+                    if (!currentElement) return null;
+
+                    // First level
+                    if (currentElement.tagName.toLowerCase() !== 'div') return null;
+                    currentElement = currentElement.firstElementChild;
+                    if (!currentElement) return null;
+
+                    // Second level - should have two divs
+                    if (currentElement.tagName.toLowerCase() !== 'div') return null;
+                    const contentDivs = Array.from(currentElement.children).filter(
+                        el => el.tagName && el.tagName.toLowerCase() === 'div'
+                    );
+
+                    if (contentDivs.length < 2) return null;
+
+                    // Extract video from first div
+                    const mediaDiv = contentDivs[0];
+                    const mediaContainer = document.createElement('div');
+                    mediaContainer.innerHTML = mediaDiv.outerHTML;
+                    
+                    const videoElement = mediaContainer.querySelector('video');
+                    if (!videoElement || !videoElement.src) return null;
+
+                    const mediaInfo = {
+                        url: videoElement.src,
+                        type: 'video'
+                    };
+
+                    // Extract CTA directly from second div
+                    const ctaDiv = contentDivs[1];
+                    const ctaContainer = document.createElement('div');
+                    ctaContainer.innerHTML = ctaDiv.outerHTML;
+
+                    // Initialize CTA info
+                    const ctaInfo = {
+                        url: null,
+                        rawUrl: null,
+                        type: null,
+                        text: null
+                    };
+
+                    // Extract button texts
+                    const buttonElements = Array.from(ctaContainer.querySelectorAll('[role="button"]'));
+                    let buttonTextsFound = [];
+
+                    buttonElements.forEach(button => {
+                        const text = button.textContent.trim();
+                        if (text && text !== 'Close') {
+                            buttonTextsFound.push(text);
+                        }
+                    });
+
+                    // Determine CTA type
+                    if (buttonTextsFound.length > 0) {
+                        const lastButtonText = buttonTextsFound[buttonTextsFound.length - 1];
+                        if (buttonTexts.includes(lastButtonText)) {
+                            ctaInfo.type = lastButtonText;
+                            buttonTextsFound.pop();
+                        }
+                    }
+
+                    // Join remaining button texts as CTA text
+                    ctaInfo.text = buttonTextsFound.join(' - ');
+
+                    // Extract URL from links
+                    const links = ctaContainer.querySelectorAll('a[href]');
+                    if (links.length > 0) {
+                        const link = links[0];
+                        let rawUrl = link.getAttribute('href') || null;
+                        
+                        // Process URL using the helper method
+                        const urlInfo = extractDestinationUrl(rawUrl);
+                        ctaInfo.url = urlInfo.url;
+                        ctaInfo.rawUrl = urlInfo.rawUrl;
+                    }
+
+                    return {
+                        url: mediaInfo.url,
+                        type: mediaInfo.type,
+                        callToAction: {
+                            url: ctaInfo.url,
+                            rawUrl: ctaInfo.rawUrl,
+                            text: ctaInfo.text,
+                            type: ctaInfo.type
+                        }
+                    };
+                };
+
+                // Method to parse a slider image item
+                const parseSliderImageItem = (item) => {
+                    // Structure for image items: div > div > a
+                    let currentElement = item.firstElementChild;
+                    if (!currentElement || currentElement.tagName.toLowerCase() !== 'div') return null;
+                    
+                    currentElement = currentElement.firstElementChild;
+                    if (!currentElement || currentElement.tagName.toLowerCase() !== 'div') return null;
+
+                    const linkElement = currentElement.querySelector('a');
+                    if (!linkElement) return null;
+
+                    // Within the a tag, we expect divs with the content
+                    const contentDivs = Array.from(linkElement.children).filter(
+                        el => el.tagName && el.tagName.toLowerCase() === 'div'
+                    );
+
+                    if (contentDivs.length < 2) return null;
+
+                    // First div should contain the image
+                    const imageDiv = contentDivs[0];
+                    const imageElement = imageDiv.querySelector('img');
+                    if (!imageElement || !imageElement.src) return null;
+
+                    const mediaInfo = {
+                        url: imageElement.src,
+                        type: 'image'
+                    };
+
+                    // Initialize CTA info
+                    const ctaInfo = {
+                        url: null,
+                        rawUrl: null,
+                        type: null,
+                        text: ''
+                    };
+
+                    // Get the raw URL from the link href and process it
+                    let rawUrl = linkElement.getAttribute('href') || null;
+                    const urlInfo = extractDestinationUrl(rawUrl);
+                    ctaInfo.url = urlInfo.url;
+                    ctaInfo.rawUrl = urlInfo.rawUrl;
+
+                    // Extract type from the second div
+                    if (contentDivs.length >= 2) {
+                        const secondDiv = contentDivs[1];
+                        const secondDivText = secondDiv.textContent.trim();
+                        
+                        // Search for any of our known types in the div's text
+                        for (const type of buttonTexts) {
+                            if (secondDivText.includes(type)) {
+                                ctaInfo.type = type;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Extract text from the element after the <a> tag
+                    const textElement = linkElement.nextElementSibling;
+                    if (textElement && textElement.textContent.trim()) {
+                        ctaInfo.text = textElement.textContent.trim();
+                    } 
+                    // If no text found after <a>, fall back to the second div inside <a>
+                    else if (contentDivs.length >= 2) {
+                        const secondDiv = contentDivs[1];
+                        const secondDivText = secondDiv.textContent.trim();
+                        
+                        // If we found a type, remove it from the text
+                        if (ctaInfo.type && secondDivText.includes(ctaInfo.type)) {
+                            ctaInfo.text = secondDivText.replace(ctaInfo.type, '').trim();
+                        } 
+                        // If no type was found, use the entire text
+                        else if (!ctaInfo.type) {
+                            ctaInfo.text = secondDivText;
+                        }
+                    }
+
+                    return {
+                        url: mediaInfo.url,
+                        type: mediaInfo.type,
+                        callToAction: {
+                            url: ctaInfo.url,
+                            rawUrl: ctaInfo.rawUrl,
+                            text: ctaInfo.text,
+                            type: ctaInfo.type
+                        }
+                    };
+                };
+
+                // Find all elements with data-type="hscroll-child"
+                const sliderItems = Array.from(tempContainer.querySelectorAll('[data-type="hscroll-child"]'));
+                console.log(`Found ${sliderItems.length} slider items`);
+
+                // Process each slider item
+                const extractedItems = [];
+
+                for (let i = 0; i < sliderItems.length; i++) {
+                    const item = sliderItems[i];
+                    const itemHtml = item.innerHTML;
+                    let extractedItem = null;
+
+                    // First check if this item has a video element
+                    if (itemHtml.includes('<video')) {
+                        extractedItem = parseSliderVideoItem(item);
+                    } else {
+                        // If not a video, try to parse as an image
+                        extractedItem = parseSliderImageItem(item);
+                    }
+
+                    if (extractedItem) {
+                        extractedItem.index = i;
+                        extractedItems.push(extractedItem);
+                    }
+                }
+
+                return extractedItems;
+            }, html, this.buttonTexts);
+
+            console.log(`Slider items found:`, items.length);
+            return items;
+        } catch (error) {
+            console.error('Error extracting slider items:', error);
             return [];
         }
     }
