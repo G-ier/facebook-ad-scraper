@@ -23,6 +23,8 @@ yarn-error.log
 .webpack/
 dist/
 build/
+.aws-sam/
+.build-tmp/
 
 # IDE
 .idea/

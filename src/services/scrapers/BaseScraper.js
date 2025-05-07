@@ -1,35 +1,60 @@
 // @ts-nocheck
-const puppeteer = require('puppeteer');
-const puppeteerExtra = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+// Import puppeteer conditionally based on environment
+let chromium, puppeteerCore, puppeteer, puppeteerExtra, StealthPlugin;
+
+// In Lambda, use @sparticuz/chromium
+if (process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    try {
+        chromium = require('@sparticuz/chromium');
+        console.log('Successfully loaded @sparticuz/chromium');
+        console.log('chromium object keys:', Object.keys(chromium));
+    } catch (error) {
+        console.error('Error loading @sparticuz/chromium:', error.message);
+        throw new Error('Failed to load @sparticuz/chromium, which is required for Lambda operation');
+    }
+    
+    try {
+        puppeteerCore = require('puppeteer-core');
+    } catch (error) {
+        console.error('Error loading puppeteer-core:', error.message);
+        throw new Error('Failed to load puppeteer-core, which is required for Lambda operation');
+    }
+    
+    StealthPlugin = null; // Not available in Lambda
+} else {
+    // In local development, use regular puppeteer
+    puppeteer = require('puppeteer');
+    puppeteerExtra = require('puppeteer-extra');
+    StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    
+    // Apply stealth plugin for local development
+    if (puppeteerExtra && StealthPlugin) {
+        puppeteerExtra.use(StealthPlugin());
+    }
+}
+
 const { sleep, randomDelay, waitForNetworkIdle } = require('../../utils/scraping-helpers');
 const { getConfig } = require('../../utils/config');
 
-// Initialize puppeteer-extra with stealth plugin
-puppeteerExtra.use(StealthPlugin());
-
 // Helper functions
 function generateFingerprint() {
-    // Simple fingerprint generation
+    // Common screen resolutions
+    const resolutions = [
+        { width: 1366, height: 768 },
+        { width: 1920, height: 1080 },
+        { width: 1440, height: 900 },
+        { width: 1536, height: 864 }
+    ];
+    
+    const resolution = resolutions[Math.floor(Math.random() * resolutions.length)];
+    
     return {
-        userAgent: [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36',
-        ][Math.floor(Math.random() * 3)],
-        viewport: {
-            width: 1920,
-            height: 1080,
-            deviceScaleFactor: 1,
-            isMobile: false,
-            hasTouch: false,
-            isLandscape: true
-        }
+        userAgent: null, // Will be set by stealth plugin
+        viewport: resolution
     };
 }
 
 async function applyFingerprint(page, fingerprint) {
-    await page.setUserAgent(fingerprint.userAgent);
     await page.setViewport(fingerprint.viewport);
 }
 
@@ -78,9 +103,12 @@ class BaseScraper {
                 headlessOption = "new";
             }
             
+            // Check if running in Lambda environment
+            const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+            
             // Browser launch options for avoiding detection
             const launchOptions = {
-                headless: headlessOption,
+                headless: isLambda ? true : headlessOption,
                 args: [
                     '--no-sandbox',                    // Disable Chrome's sandbox for better performance
                     '--disable-setuid-sandbox',        // Disable setuid sandbox (Linux only)
@@ -107,7 +135,8 @@ class BaseScraper {
             console.log('Launching browser with options:', JSON.stringify({
                 headless: launchOptions.headless,
                 stealth: this.config.browser.stealth,
-                executablePath: launchOptions.executablePath ? '(custom path)' : '(default)',
+                executablePath: launchOptions.executablePath ? launchOptions.executablePath : '(default)',
+                isLambda: isLambda,
                 args: launchOptions.args.slice(0, 3) + '...' // Just show first few args to keep log clean
             }, null, 2));
             
@@ -116,10 +145,29 @@ class BaseScraper {
             
             while (attempts < maxAttempts) {
                 try {
-                    // Use stealth or regular puppeteer based on config
-                    this.browser = this.config.browser.stealth
-                        ? await puppeteerExtra.launch(launchOptions)
-                        : await puppeteer.launch(launchOptions);
+                    // Use different browser launch approach based on environment
+                    if (isLambda) {
+                        console.log('Launching browser in Lambda environment with @sparticuz/chromium');
+                        
+                        // Set up chromium options for Lambda environment
+                        const execPath = await chromium.executablePath();
+                        console.log(`Using Chromium executable path: ${execPath}`);
+                        
+                        this.browser = await puppeteerCore.launch({
+                            args: chromium.args,
+                            defaultViewport: chromium.defaultViewport,
+                            executablePath: execPath,
+                            headless: chromium.headless,
+                            ignoreHTTPSErrors: true,
+                        });
+                        
+                        console.log('Browser launched successfully in Lambda');
+                    } else {
+                        // In development, use regular puppeteer or puppeteer-extra
+                        this.browser = this.config.browser.stealth && puppeteerExtra
+                            ? await puppeteerExtra.launch(launchOptions)
+                            : await puppeteer.launch(launchOptions);
+                    }
                     break;
                 } catch (err) {
                     attempts++;

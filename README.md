@@ -1,6 +1,6 @@
-# Ad Library Scrapper
+# Ad Inspo Scraper
 
-A serverless scraping service for various platforms, deployed as an AWS Lambda function.
+A serverless scraping service for various ad platforms, deployed as an AWS Lambda function.
 
 ## Overview
 
@@ -8,21 +8,26 @@ This project provides a flexible, serverless approach to web scraping. It's desi
 
 ## Features
 
-- Serverless architecture using AWS Lambda
+- Serverless architecture using AWS Lambda and AWS SAM
 - Modular design with platform-specific scrapers
 - Anti-detection measures for reliable scraping
 - Local testing capabilities
 - Extensible for multiple platforms (Facebook, Google, TikTok, etc.)
 - Utility functions for common scraping tasks
-- Proxy management for avoiding IP bans
+- Optimized deployment with small package size (under Lambda's 250MB limit)
 - Environment-aware configuration
+
+## Architecture
+
+- **Lambda Function**: Runs on x86_64 architecture with 2GB memory
+- **Chrome**: Uses `@sparticuz/chromium` with public chrome-aws-lambda layer (Layer ARN: arn:aws:lambda:us-east-1:764866452798:layer:chrome-aws-lambda:50)
+- **API Gateway**: HTTP API with custom domain (scrap.efflux.com)
+- **Runtime**: Node.js 20.x
 
 ## Project Structure
 
 ```
-├── legacy/               # Original scraping code
 ├── src/
-│   ├── handlers/         # Lambda function handlers
 │   ├── services/         # Service layer
 │   │   ├── scrapers/     # Platform-specific scrapers
 │   │   │   ├── BaseScraper.js
@@ -34,33 +39,66 @@ This project provides a flexible, serverless approach to web scraping. It's desi
 │   │   ├── config.js     # Environment configuration
 │   │   ├── proxy-manager.js # Proxy rotation and management
 │   │   └── scraping-helpers.js # Common scraping utilities
-│   └── local/            # Local testing utilities
-├── serverless.yml        # Serverless configuration
-└── package.json          # Project dependencies
+│   └── routes/           # Express routes
+│       └── index.js      # API endpoints
+├── script/               # Build scripts
+│   └── prepare-deploy.sh # Optimized deployment preparation
+├── template.yaml         # AWS SAM template
+├── app.js                # Express application
+└── lambda.js             # Lambda handler
 ```
 
 ## Setup
 
 1. Install dependencies:
 ```
-npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
-npm install --save-dev serverless serverless-offline serverless-dotenv-plugin
+npm install
 ```
 
-2. Create a .env file:
+## Deployment Instructions
+
+### 1. Prepare the optimized deployment package
+
+```bash
+# Clean and prepare the deployment package
+npm run prepare-deploy
 ```
-cp env.example .env
+
+This script:
+- Creates a clean .build-tmp directory
+- Copies only necessary files
+- Installs only production dependencies
+- Removes unnecessary packages that are provided by the Lambda layer
+
+### 2. Build with SAM
+
+```bash
+# Build using the optimized package
+npm run build:optimized
+
+# Or manually:
+sam build --template template.yaml --base-dir .build-tmp
+```
+
+### 3. Deploy to AWS
+
+```bash
+# Deploy the application
+npm run deploy:sam
+
+# Or manually:
+sam deploy
 ```
 
 ## Testing & Usage Environments
 
 ### 1. Local Direct Testing
 
-The simplest way to test the scraper locally without any serverless setup:
+The simplest way to test the scraper locally:
 
 ```bash
 # Run the local test script
-node src/local/test.js
+npm test
 ```
 
 This will:
@@ -71,70 +109,24 @@ This will:
 
 You can edit `src/local/test.js` to test different platforms or URLs.
 
-### 2. Local Serverless Testing
+### 2. AWS Lambda Testing
 
-Test the function as it would run on AWS, but locally:
-
-```bash
-# Start the serverless offline server
-npx serverless offline
-# Or use the npm script
-npm start
-```
-
-Then send requests to the local endpoint:
+After deployment, you can test the Lambda function directly:
 
 ```bash
-# Using curl
-curl -X POST http://localhost:3000/scrape \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=dental%20implants",
-    "platform": "facebook",
-    "browser": {
-      "headless": false,
-      "timeout": 30000
-    }
-  }'
+aws lambda invoke --function-name efflux-ad-inspo-scraper \
+  --payload '{"version":"2.0","routeKey":"POST /scrape","rawPath":"/scrape","rawQueryString":"","headers":{"content-type":"application/json"},"requestContext":{"http":{"method":"POST","path":"/scrape"}},"body":"{\"url\":\"https://www.facebook.com/ads/library/?id=24981650168280552\",\"platform\":\"facebook\"}","isBase64Encoded":false}' \
+  --cli-binary-format raw-in-base64-out response.json
 ```
 
-### 3. AWS Deployment
-
-Deploy to AWS Lambda for production use:
-
-```bash
-# Deploy to AWS (requires AWS credentials to be configured)
-npx serverless deploy
-# Or use the npm script
-npm run deploy
-```
-
-After deployment, you'll get an endpoint URL. Make POST requests to this endpoint:
-
-```bash
-# Replace YOUR_ENDPOINT_URL with the actual URL from the deployment
-curl -X POST https://YOUR_ENDPOINT_URL/scrape \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=dental%20implants",
-    "platform": "facebook",
-    "browser": {
-      "headless": true,
-      "timeout": 30000
-    }
-  }'
-```
-
-In production (AWS Lambda), the browser will always run in headless mode for better performance.
-
-### 4. Frontend Integration
+### 3. Frontend Integration
 
 To call the scraper from a frontend application, use fetch or axios:
 
 ```javascript
 // Using fetch
 async function scrapeAds() {
-  const response = await fetch('https://YOUR_ENDPOINT_URL/scrape', {
+  const response = await fetch('https://scrap.efflux.com/scrape', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -172,69 +164,61 @@ The API accepts the following parameters:
   "success": true,
   "platform": "facebook",
   "data": {
-    "videoUrls": ["https://example.com/video1.mp4", "..."],
-    "totalVideos": 10
+    "type": "image",
+    "libraryId": "123456789",
+    "media": {
+      "type": "image",
+      "url": "https://example.com/image.jpg"
+    },
+    "advertiser": {
+      "name": "Example Company",
+      "avatar": "https://example.com/avatar.jpg"
+    },
+    "content": {
+      "text": "Ad description text"
+    },
+    "callToAction": {
+      "url": "https://example.com",
+      "text": "Learn More"
+    }
   }
 }
 ```
 
+## How It Works
+
+1. When running locally, the code uses your local Chrome installation with full Puppeteer
+2. When running in Lambda, it uses Chrome from the Lambda layer with @sparticuz/chromium
+3. The optimized deployment package excludes development dependencies and unnecessary files
+
 ## Troubleshooting
 
-Common issues and solutions:
+### Package Size Issues
 
-1. **Browser launch errors**:
-   - Ensure Chrome is installed on your system
-   - Check if you have proper permissions
+If you encounter "Unzipped size must be smaller than 262144000 bytes" error:
+- Make sure you're using the optimized build process
+- Check if any unnecessary dependencies are included
+- Use the `npm run prepare-deploy` script to clean up the package
 
-2. **Timeouts**:
-   - Increase `browser.timeout` for complex pages 
-   - Pages with many dynamic elements may need longer timeouts
+### Chrome Compatibility Issues
 
-3. **Rate limiting/blocking**:
-   - Consider enabling the proxy feature
-   - Reduce scraping frequency
+If you encounter "Failed to launch the browser process!" error:
+- Make sure architecture settings match (x86_64 in template.yaml)
+- Check if chrome-aws-lambda layer version is compatible with your Node.js version
+- For local testing, use the direct test script instead of SAM local
 
-4. **Memory issues on Lambda**:
-   - Increase Lambda memory allocation in serverless.yml
-   - Optimize puppeteer settings
+### API Gateway Issues
+
+If you're unable to reach your endpoint:
+- Check Route53 configuration for your custom domain
+- Verify the API Gateway deployment was successful
+- Check CloudWatch logs for any Lambda errors
 
 ## Adding New Scrapers
 
 1. Create a new file in `src/services/scrapers` named `[Platform]Scraper.js`
 2. Extend the `BaseScraper` class and implement the `scrapeRawContent` method
 3. Add the new scraper to the `ScraperFactory.js` file
-
-## Utility Functions
-
-The `utils` folder contains several helper modules:
-
-- `config.js`: Environment-aware configuration
-- `proxy-manager.js`: Rotate and manage proxy connections
-- `scraping-helpers.js`: Common functions for scraping (delays, scrolling, etc.)
-
-Example usage:
-
-```javascript
-const { randomDelay, retry } = require('../utils/scraping-helpers');
-const ProxyManager = require('../utils/proxy-manager');
-const { getConfig } = require('../utils/config');
-
-// Get configuration based on environment
-const config = getConfig({
-  browser: {
-    timeout: 60000 // Override default timeout
-  }
-});
-
-// Add proxies for rotation
-const proxyManager = new ProxyManager([
-  'http://proxy1.example.com:8080',
-  'http://proxy2.example.com:8080'
-]);
-
-// Use proxy with puppeteer
-const launchArgs = proxyManager.getPuppeteerArgs();
-```
 
 ## License
 

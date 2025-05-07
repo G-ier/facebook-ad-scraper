@@ -2,21 +2,28 @@
   "name": "efflux-scrape-function",
   "version": "1.0.0",
   "description": "Serverless scraper for Facebook ad library",
-  "main": "src/handlers/scraper.js",
+  "main": "lambda.js",
   "scripts": {
     "test": "node src/local/test.js",
-    "start": "serverless offline",
-    "deploy": "serverless deploy"
+    "build": "sam build",
+    "prepare-deploy": "./script/prepare-deploy.sh",
+    "build:optimized": "npm run prepare-deploy && sam build --template template.yaml --base-dir .build-tmp",
+    "deploy:sam": "sam deploy",
+    "dev:live": "sam sync --watch",
+    "package": "sam package --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-cehz91iuedml --output-template-file packaged.yaml"
   },
   "dependencies": {
+    "@vendia/serverless-express": "^4.12.0",
     "cheerio": "^1.0.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "puppeteer-core": "^10.4.0",
+    "@sparticuz/chromium": "^131.0.0"
+  },
+  "devDependencies": {
     "puppeteer": "^24.8.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
-  },
-  "devDependencies": {
-    "serverless": "^3.40.0",
-    "serverless-dotenv-plugin": "^6.0.0",
-    "serverless-offline": "^13.9.0"
   }
 }
