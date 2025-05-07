@@ -54,10 +54,6 @@ class FacebookScraper extends BaseScraper {
 
             const adData = await this.extractAdData();
             console.log('Extraction complete');
-            console.log(adData);
-            adData.media.items.forEach(item => {
-                console.log(item);
-            });
             return adData;
         } catch (error) {
             console.error('Error scraping Facebook content:', error);
