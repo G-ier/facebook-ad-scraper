@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Efflux Ad Scraper Service
+
+Globals:
+  Function:
+    Timeout: 300 # 5 minutes, matching serverless.yml
+    AutoPublishAlias: live
+    DeploymentPreference:
+      Enabled: true
+      Type: AllAtOnce
+    Runtime: nodejs20.x # Matching serverless.yml
+    Architectures:
+      - x86_64  # Changed from arm64 for Chrome compatibility
+    MemorySize: 2048 # Matching serverless.yml for Puppeteer
+    Tags:
+      project: efflux
+      component: ad-inspo-scraper
+
+Parameters:
+  LogsRetentionInDays:
+    Type: Number
+    Default: 7
+    Description: Number of days to retain logs in CloudWatch Logs
+
+  AWSRegion:
+    Type: String
+    Default: us-east-1
+    Description: AWS Region
+
+  AWSAccountId:
+    Type: String
+    Default: 033156084586
+    Description: AWS Account ID
+
+  AWSProfile:
+    Type: String
+    Default: new-efflux
+    Description: AWS Profile
+
+Resources:
+  ScraperHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: Efflux-Ad-Inspo-Scraper
+      Description: An HTTP API for the Efflux Ad Inspo Scraper service
+      Domain:
+        DomainName: scrap.efflux.com
+        CertificateArn: arn:aws:acm:us-east-1:033156084586:certificate/72c87fb3-c6e2-41c3-844e-661aa01e9811
+        Route53:
+          HostedZoneId: Z04599272GF3WNEZU1XZX
+          DomainName: scrap.efflux.com
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: false
+        DataTraceEnabled: false
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 10
+      CorsConfiguration:
+        AllowMethods:
+          - POST
+        AllowHeaders:
+          - Content-Type
+          - X-Amz-Date
+          - Authorization
+          - X-Api-Key
+          - X-Amz-Security-Token
+          - X-Amz-User-Agent
+        AllowOrigins:
+          - "*" # For development, consider restricting in production
+      Tags:
+        project: efflux
+        component: ad-inspo-scraper
+
+  ScrapeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambda.handler
+      FunctionName: efflux-ad-inspo-scraper
+      Description: A service to scrape ads from various platforms
+      Layers:
+        - arn:aws:lambda:us-east-1:764866452798:layer:chrome-aws-lambda:50  # Use latest layer version
+      Environment:
+        Variables:
+          NODE_ENV: production
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+      Events:
+        ScraperEndpoint:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ScraperHttpApi
+            Path: /scrape
+            Method: POST
+
+  # Log group for the lambda function
+  ScrapeFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ScrapeFunction}"
+      RetentionInDays: !Ref LogsRetentionInDays
+      Tags:
+        - Key: project
+          Value: efflux
+        - Key: component
+          Value: ad-inspo-scraper
+
+  # Add a parameter store for the ad scraper service URL
+  EffluxAdScraperApiEndpoint:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /AD_SCRAPER_SERVICE_URL
+      Description: The URL for the Efflux Ad Scraper service
+      Type: String
+      Value: https://scrap.efflux.com
+      Tags:
+        project: efflux
+        component: ad-inspo-scraper
+
+Outputs:
+  ScraperApiEndpoint:
+    Description: The URL for the Efflux Ad Scraper service
+    Value: https://scrap.efflux.com
+    Export:
+      Name: EffluxAdScraperApiEndpoint 

@@ -1,0 +1,19 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "Efflux-Ad-Inspo-Scraper"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-cehz91iuedml"
+s3_prefix = "Efflux-Ad-Inspo-Scraper"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = "AWSRegion=\"us-east-1\" AWSAccountId=\"033156084586\" AWSProfile=\"new-efflux\""
+confirm_changeset = false
+tags = "project=\"efflux\""
+
+[default.build]
+[default.build.parameters]
+use_container = false
+cached = true
+parallel = true
+skip_pull_image = true 
