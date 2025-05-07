@@ -7,6 +7,11 @@ const { waitForPageLoad } = require('../../utils/scraping-helpers');
  * Extracts ad information from Facebook Ad Library pages
  */
 class FacebookScraper extends BaseScraper {
+    
+    /**
+     * Constructor for FacebookScraper
+     * @param {Object} config - Configuration object for the scraper
+     */
     constructor(config) {
         super(config);
         this.htmlContent = null;
@@ -54,6 +59,7 @@ class FacebookScraper extends BaseScraper {
 
             const adData = await this.extractAdData();
             console.log('Extraction complete');
+            console.log(JSON.stringify(adData, null, 2));
             return adData;
         } catch (error) {
             console.error('Error scraping Facebook content:', error);

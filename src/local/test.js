@@ -3,7 +3,7 @@ const { handler } = require('../handlers/scraper');
 
 async function test() {
     try {
-        // Sample request for scraping a single Facebook ad
+        console.log("Starting diagnostic test...");
         const result = await handler({
             // url: 'https://www.facebook.com/ads/library/?id=688960707014802', // image - NO CTA
             // url: 'https://www.facebook.com/ads/library/?id=1506084790352712', // image - CTA
@@ -22,8 +22,18 @@ async function test() {
         });
         
     } catch (error) {
-        console.error('Error during test:', error);
+        console.error('Error during test:', error.message);
+        console.error('Stack trace:', error.stack);
     }
 }
 
-test().catch(console.error); 
+// Run with proper error handling
+test()
+    .then(() => {
+        console.log('Test completed');
+        process.exit(0);
+    })
+    .catch(error => {
+        console.error('Unhandled error in test:', error);
+        process.exit(1);
+    });
