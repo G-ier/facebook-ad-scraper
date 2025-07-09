@@ -1,4 +1,5 @@
 # Ad Inspo Scraper
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-%E2%98%95%EF%B8%8F-ffdd00?style=flat-square)](https://buymeacoffee.com/gier)
 
 A serverless scraping service for various ad platforms, deployed as an AWS Lambda function.
 
@@ -219,6 +220,11 @@ If you're unable to reach your endpoint:
 1. Create a new file in `src/services/scrapers` named `[Platform]Scraper.js`
 2. Extend the `BaseScraper` class and implement the `scrapeRawContent` method
 3. Add the new scraper to the `ScraperFactory.js` file
+
+## Support
+
+If you find this project useful, please consider supporting me by buying me a coffee:<br/><br/>
+<a href="https://coff.ee/gier" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="220" ></a>
 
 ## License
 

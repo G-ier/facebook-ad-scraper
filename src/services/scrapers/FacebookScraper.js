@@ -69,7 +69,6 @@ class FacebookScraper extends BaseScraper {
             };
         }
     }
-
     /**
      * Extracts structured ad data from the Facebook Ad Library
      */
